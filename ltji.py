@@ -40,6 +40,16 @@ def get_class_list(elt):
     return value.split() if value else []
 
 
+def get_inline_styles(elt):
+    value = elt.get_attribute('style')
+    if not value:
+        return
+    for item in value.split(';'):
+        if item:
+            key, value = item.split(':', 1)
+            yield key.strip(), value.strip()
+
+
 def get_parent(elt):
     return elt.find_element_by_xpath('./..')
 
@@ -129,8 +139,8 @@ def set_author_role(scope, elt_id, text):
         # Add new role
         logger.debug("Setting author role %r to custom value %r", elt_id, text)
         select.select_by_value('xxxOTHERxxx')
-        time.sleep(0.1)
-        alert = get_driver(scope).switch_to.alert
+        alert = WebDriverWait(get_driver(scope), 10).until(
+            EC.alert_is_present())
         alert.send_keys(text)
         alert.accept()
 
@@ -157,7 +167,8 @@ def set_other_authors(driver, sauthors):
         if idx >= num_rows:
             logger.debug("Clicking 'add another author'")
             add_row_link.click()
-            time.sleep(0.1)
+            WebDriverWait(driver, 10).until(
+                EC.presence_of_element_located((By.ID, f"person_name-{idx}")))
         set_author(parent, f'person_name-{idx}', f'person_role-{idx}', author)
 
     # Clear any extra rows
@@ -174,18 +185,21 @@ def set_tags(driver, tags):
 def set_rating(driver, rating):
     star = math.ceil(rating) or 1  # Which star to click on
     target = str(int(rating * 2))
+    parent = driver.find_element_by_xpath('//*[@id="form_rating"]/../..')
     # Click up to 3 times until rating reaches desired value
     for _ in range(3):
-        rating_elt = driver.find_element_by_id('form_rating')
+        rating_elt = parent.find_element_by_id('form_rating')
         if rating_elt.get_attribute('value') == target:
             break
         star_elt = get_parent(rating_elt).find_element_by_css_selector(
             f':scope > img:nth-of-type({star})')
         logger.debug("Clicking rating star %d", star)
         star_elt.click()
-        time.sleep(0.1)
+        # Opacity is set to 0.3 while updating, then to 1 on success
+        WebDriverWait(driver, 10).until(
+            lambda _: ('opacity', '1') in get_inline_styles(parent))
     else:
-        rating_elt = driver.find_element_by_id('form_rating')
+        rating_elt = parent.find_element_by_id('form_rating')
         if rating_elt.get_attribute('value') != target:
             raise RuntimeError("Failed to set rating")
 
@@ -206,11 +220,9 @@ def set_review_language(driver, lang):
     # Click button to change language
     logger.debug("Clicking review language 'change' button")
     parent_elt.find_element_by_css_selector('a').click()
-    time.sleep(0.1)
     # Select language
-    # select = Select(parent_elt.find_element_by_css_selector('select'))
     select = Select(WebDriverWait(driver, 10).until(
-        lambda wd: parent_elt.find_element_by_css_selector('select')))
+        lambda _: parent_elt.find_element_by_css_selector('select')))
     if not langs:
         logger.debug("Populating language code map")
         for opt in select.options[3:]:
@@ -284,7 +296,6 @@ def set_format(driver, format_data):
         # Retry with complete list
         logger.debug("Selecting 'Show complete list' in media type menu")
         select.select_by_value('showcomplete')
-        time.sleep(0.1)
         select = Select(parent.find_element_by_id('mediatype_all'))
         if select_format(select, format_data):
             return
@@ -297,7 +308,6 @@ def set_format(driver, format_data):
         # Add new media type
         logger.debug("Selecting 'Add media' in media type menu")
         select.select_by_value('addmedia')
-        time.sleep(0.1)
         set_text(parent, 'newmedia', format_text)
         set_select(parent, 'nestunder', format_code.rsplit('.', 1)[0])
     else:
@@ -323,16 +333,16 @@ def set_multirow_fs(scope, items, set_fn, term):
         fsid = fs.get_attribute('id')
         logger.debug("Adding %s %d", term, i+1)
         fs.find_element_by_id(f'arb_{fsid}').click()
-        time.sleep(0.1)
         return WebDriverWait(get_driver(scope), 10).until(
-            lambda wd: scope.find_element_by_css_selector(
+            lambda _: scope.find_element_by_css_selector(
                 f':scope > fieldset:nth-of-type({i+1})'))
 
     def del_fs(scope, i, fs):
         fsid = fs.get_attribute('id')
         logger.debug("Removing %s %d", term, i+1)
         fs.find_element_by_id(f'arbm_{fsid}').click()
-        time.sleep(0.1)
+        WebDriverWait(get_driver(scope), 10).until(
+            lambda _: ('display', 'none') in get_inline_styles(fs))
 
     rows = scope.find_elements_by_tag_name('fieldset')
     set_multirow(scope, items, rows, set_fn, add_fs, del_fs)
@@ -454,8 +464,8 @@ def set_language(driver, term, elt_id, lang, lang_code):
         # Didn't find the language code, so click the "show all languages" link
         logger.debug("Clicking 'show all languages' link")
         parent.find_element_by_css_selector('.bookEditHint > a').click()
-        time.sleep(0.1)
-        select = Select(parent.find_element_by_tag_name('select'))
+        select = Select(WebDriverWait(driver, 10).until(
+            lambda wd: parent.find_element_by_tag_name('select')))
     select_by_value(select, lang_code,
                     "Selecting %s language %r (%s)", term, lang, lang_code)
 
@@ -506,19 +516,17 @@ def set_from_where(driver, from_where):
         if location:
             logger.debug("Clicking location %r link", change_link.text)
             change_link.click()
-            time.sleep(0.1)
             popup = WebDriverWait(driver, 10).until(
                 EC.presence_of_element_located((By.ID, "pickrecommendations")))
             remove_link = popup.find_element_by_css_selector(
                 ':scope > p:nth-of-type(3) > a')
             logger.debug("Clicking location remove link")
             remove_link.click()
-            time.sleep(0.1)
+            WebDriverWait(driver, 10).until(EC.staleness_of(popup))
         return
     if location != from_where:
         logger.debug("Clicking location %r link", change_link.text)
         change_link.click()
-        time.sleep(0.1)
         popup = WebDriverWait(driver, 10).until(
             EC.presence_of_element_located((By.ID, "pickrecommendations")))
         # Check if venue is already used
@@ -528,13 +536,12 @@ def set_from_where(driver, from_where):
             if anchor.text == from_where:
                 logger.debug("Selecting already used venue %r", from_where)
                 anchor.click()
-                time.sleep(0.1)
+                WebDriverWait(driver, 10).until(EC.staleness_of(popup))
                 return
         # Search for venue by name
         # TODO: Make this optional with config flag
         logger.debug("Choosing 'Venue search' tab")
         popup.find_element_by_id('lbtabchromemenu1').click()
-        time.sleep(0.1)
         form = popup.find_element_by_id('venuesearchform')
         search_field = form.find_element_by_css_selector('input[name="query"]')
         logger.debug("Populating venue search field")
@@ -546,7 +553,6 @@ def set_from_where(driver, from_where):
             'input[name="Submit"]')
         logger.debug("Clicking search button")
         submit_button.click()
-        time.sleep(0.1)
         results = popup.find_element_by_id('venuelist')
         WebDriverWait(driver, 10).until(
             lambda _: 'updating' not in get_class_list(results))
@@ -556,19 +562,18 @@ def set_from_where(driver, from_where):
             if anchor.text == from_where:
                 logger.debug("Selecting venue %r", from_where)
                 anchor.click()
-                time.sleep(0.1)
+                WebDriverWait(driver, 10).until(EC.staleness_of(popup))
                 return
         # Enter location as free text
         logger.debug("Choosing 'Free text' tab")
         popup.find_element_by_id('lbtabchromemenu2').click()
-        time.sleep(0.1)
         form = popup.find_element_by_id('freetextform')
         set_text(form, 'textareacomments', from_where)
         submit_button = form.find_element_by_css_selector(
             'input[name="Submit"]')
         logger.debug("Saving location")
         submit_button.click()
-        time.sleep(0.1)
+        WebDriverWait(driver, 10).until(EC.staleness_of(popup))
 
 
 def set_physical_description(driver, physical_description):
@@ -593,6 +598,12 @@ def set_bcid(driver, bcid):
     id1, id2 = bcid.split('-') if bcid else ('', '')
     set_text(driver, 'form_bcid_1', id1)
     set_text(driver, 'form_bcid_2', id2)
+
+
+def save_changes(driver):
+    html = driver.find_element_by_tag_name('html')
+    driver.find_element_by_id('book_editTabTextSave2').click()
+    WebDriverWait(driver, 10).until(EC.staleness_of(html))
 
 
 def add_book(driver, book_id, book_data):
@@ -695,13 +706,14 @@ def add_book(driver, book_id, book_data):
     if False:  # TODO: Command-line flag for this
         set_checkbox(driver, 'books_private', True)
 
-    driver.find_element_by_id('book_editTabTextSave2').click()
+    save_changes(driver)
 
 
 def main(data):
     success = False
 
     with webdriver.Firefox() as driver:
+        # TODO: Improve error handling
         try:
             driver.get('https://www.librarything.com/')
             login(driver)

@@ -31,6 +31,10 @@ def get_path(obj, *keys):
     return obj
 
 
+def normalize_newlines(s):
+    return s.replace('\r\n', '\n').replace('\r', '\n') if s else s
+
+
 def get_driver(scope):
     return scope if isinstance(scope, WebDriver) else scope.parent
 
@@ -83,6 +87,7 @@ def login(driver):
 def set_text(scope, elt_id, value):
     elt = scope.find_element_by_id(elt_id)
     if value:
+        value = normalize_newlines(value)
         if elt.get_attribute('value') != value:
             if elt.tag_name == 'textarea':
                 logger.debug("Setting text field %r", elt_id)

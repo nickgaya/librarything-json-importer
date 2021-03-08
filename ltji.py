@@ -2,9 +2,11 @@ import argparse
 import json
 import logging
 import math
+import os.path
 import sys
 import time
 import traceback
+from urllib.parse import urlparse
 
 from selenium import webdriver
 from selenium.common.exceptions import NoSuchElementException
@@ -134,22 +136,24 @@ class LibraryThingRobot:
     def login(self):
         """Log in to LibraryThing."""
         driver = self.driver
-        driver.get('https://www.librarything.com/')
-        # TODO: Cookies file should be specified via a command-line option
-        try:
-            with open('cookies.json') as f:
+        cookies_file = self.config.cookies_file
+        driver.get('https://www.librarything.com')
+        if cookies_file and os.path.exists(cookies_file):
+            logger.debug("Loading cookies from %r", cookies_file)
+            with open(cookies_file) as f:
                 cookies = json.load(f)
             for cookie in cookies:
                 driver.add_cookie(cookie)
-            return
-        except Exception:
-            pass
-
-        print("Log in to LibraryThing, then press enter")
-        input()
-
-        with open('cookies.json', 'w') as f:
-            json.dump(driver.get_cookies(), f)
+            driver.get('https://www.librarything.com/home')
+        if not urlparse(driver.current_url).path == '/home':
+            logger.debug("Waiting for user login")
+            WebDriverWait(self.driver, 180).until(
+                lambda wd: urlparse(wd.current_url).path == '/home')
+        logger.debug("Login successful")
+        if cookies_file:
+            with open(cookies_file, 'w') as f:
+                json.dump(driver.get_cookies(), f)
+            logger.debug("Saved cookies to %r", cookies_file)
 
     def set_author_role(self, scope, elt_id, text):
         """Set author role with the given element id."""
@@ -814,6 +818,12 @@ if __name__ == '__main__':
                         help="Log additional debugging information.")
     parser.add_argument('-b', '--browser', choices=DRIVERS,
                         default='firefox', help="Browser to use")
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument('-c', '--cookies-file', default='cookies.json',
+                       help="File to save/load login cookies")
+    group.add_argument('--no-cookies-file', dest='cookies_file',
+                       action='store_const', const='',
+                       help="Don't save or load cookies")
     parser.add_argument('-t', '--tag',
                         help="Tag to add to all imported books.")
     parser.add_argument('--no-venue-search', action='store_true',

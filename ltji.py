@@ -16,6 +16,7 @@ logger = logging.getLogger('ltji')
 
 
 def get_path(obj, *keys):
+    """Extract a value from a JSON data structure."""
     for key in keys:
         if not obj:
             return obj
@@ -32,19 +33,23 @@ def get_path(obj, *keys):
 
 
 def normalize_newlines(s):
+    """Normalize line breaks in a string."""
     return s.replace('\r\n', '\n').replace('\r', '\n') if s else s
 
 
 def get_driver(scope):
+    """Return a WebDriver object given a driver or element."""
     return scope if isinstance(scope, WebDriver) else scope.parent
 
 
 def get_class_list(elt):
+    """Return the list of CSS classes of an element."""
     value = elt.get_attribute('class')
     return value.split() if value else []
 
 
 def get_inline_styles(elt):
+    """Yield the (key, value) pairs of an element's style attribute."""
     value = elt.get_attribute('style')
     if not value:
         return
@@ -55,36 +60,17 @@ def get_inline_styles(elt):
 
 
 def get_parent(elt):
+    """Get the parent of a given element."""
     return elt.find_element_by_xpath('./..')
 
 
-def focus(elt):
-    get_driver(elt).execute_script("arguments[0].focus()", elt)
-
-
 def defocus(elt):
+    """Remove focus from a given element."""
     get_driver(elt).execute_script("arguments[0].blur()", elt)
 
 
-def login(driver):
-    # TODO: Cookies file should be specified via a command-line option
-    try:
-        with open('cookies.json') as f:
-            cookies = json.load(f)
-        for cookie in cookies:
-            driver.add_cookie(cookie)
-        return
-    except Exception:
-        pass
-
-    print("Log in to LibraryThing, then press enter")
-    input()
-
-    with open('cookies.json', 'w') as f:
-        json.dump(driver.get_cookies(), f)
-
-
 def set_text(scope, elt_id, value):
+    """Set the value of a text element by id."""
     elt = scope.find_element_by_id(elt_id)
     if value:
         value = normalize_newlines(value)
@@ -104,12 +90,14 @@ def set_text(scope, elt_id, value):
 
 
 def select_by_value(select, value, log_msg, *log_args):
+    """Set the value of a select element."""
     if select.first_selected_option.get_attribute('value') != value:
         logger.debug(log_msg, *log_args)
         select.select_by_value(value)
 
 
 def set_select(scope, elt_id, value, name=None):
+    """Set the value of a select element by id."""
     select = Select(scope.find_element_by_id(elt_id))
     if name:
         select_by_value(select, value,
@@ -121,6 +109,7 @@ def set_select(scope, elt_id, value, name=None):
 
 
 def set_checkbox(scope, elt_id, selected):
+    """Set the value of a checkbox element."""
     checkbox = scope.find_element_by_id(elt_id)
     if checkbox.is_selected() != selected:
         logger.debug("%s checkbox %r",
@@ -129,422 +118,452 @@ def set_checkbox(scope, elt_id, selected):
     return checkbox
 
 
-def set_author_role(scope, elt_id, text):
-    select = Select(scope.find_element_by_id(elt_id))
-    if not text:
-        select_by_value(select, '', "Clearing author role %r", elt_id)
-        return
-    if select.first_selected_option.text == text:
-        return  # Already selected
-    available = {option.text for option in select.options[2:-2]}
-    if text in available:
-        logger.debug("Setting author role %r to %r", elt_id, text)
-        select.select_by_visible_text(text)
-    else:
-        # Add new role
-        logger.debug("Setting author role %r to custom value %r", elt_id, text)
-        select.select_by_value('xxxOTHERxxx')
-        alert = WebDriverWait(get_driver(scope), 10).until(
-            EC.alert_is_present())
-        alert.send_keys(text)
-        alert.accept()
+class LibraryThingDriver:
+    def __init__(self, driver):
+        self.driver = driver
 
+    def wait_until(self, condition):
+        """Wait up to 10 seconds for the given wait condition."""
+        return WebDriverWait(self.driver, 10).until(condition)
 
-def set_author(scope, name_id, role_id, author):
-    author = author or {}
-    set_text(scope, name_id, author.get('lf'))
-    set_author_role(scope, role_id, author.get('role'))
-
-
-def set_other_authors(driver, sauthors):
-    sauthors = sauthors or []
-    num_authors = len(sauthors)
-
-    # Find relevant form elements
-    parent = driver.find_element_by_id('bookedit_roles')
-    num_rows = len(parent.find_elements_by_class_name('bookPersonName'))
-    add_row_link = (parent.find_element_by_id('addPersonControl')
-                    .find_element_by_tag_name('a'))
-
-    idx = 0
-    for idx, author in enumerate(sauthors):
-        # Add rows as needed
-        if idx >= num_rows:
-            logger.debug("Clicking 'add another author'")
-            add_row_link.click()
-            WebDriverWait(driver, 10).until(
-                EC.presence_of_element_located((By.ID, f"person_name-{idx}")))
-        set_author(parent, f'person_name-{idx}', f'person_role-{idx}', author)
-
-    # Clear any extra rows
-    for idx in range(num_authors, num_rows):
-        set_author(parent, f'person_name-{idx}', f'person_role-{idx}', None)
-
-
-def set_tags(driver, tags):
-    # TODO: Make extra tag configurable
-    field = set_text(driver, 'form_tags', ','.join((tags or []) + ['ltji']))
-    defocus(field)  # Defocus text field to avoid/dismiss autocomplete popup
-
-
-def set_rating(driver, rating):
-    star = math.ceil(rating) or 1  # Which star to click on
-    target = str(int(rating * 2))
-    parent = driver.find_element_by_xpath('//*[@id="form_rating"]/../..')
-    # Click up to 3 times until rating reaches desired value
-    for _ in range(3):
-        rating_elt = parent.find_element_by_id('form_rating')
-        if rating_elt.get_attribute('value') == target:
-            break
-        star_elt = get_parent(rating_elt).find_element_by_css_selector(
-            f':scope > img:nth-of-type({star})')
-        logger.debug("Clicking rating star %d", star)
-        star_elt.click()
-        # Opacity is set to 0.3 while updating, then to 1 on success
-        WebDriverWait(driver, 10).until(
-            lambda _: ('opacity', '1') in get_inline_styles(parent))
-    else:
-        rating_elt = parent.find_element_by_id('form_rating')
-        if rating_elt.get_attribute('value') != target:
-            raise RuntimeError("Failed to set rating")
-
-
-langs = {}  # Map of language strings to selection values
-
-
-def set_review_language(driver, lang):
-    if not lang:
-        return
-    parent_elt = driver.find_element_by_id('ajax_choose_reviewlanguage')
-    # Check if correct language is already set
-    if lang in langs:
-        lang_elt = parent_elt.find_element_by_css_selector(
-            'input[name="language"]')
-        if lang_elt.get_attribute('value') == langs[lang]:
+    def login(self):
+        """Log in to LibraryThing."""
+        driver = self.driver
+        driver.get('https://www.librarything.com/')
+        # TODO: Cookies file should be specified via a command-line option
+        try:
+            with open('cookies.json') as f:
+                cookies = json.load(f)
+            for cookie in cookies:
+                driver.add_cookie(cookie)
             return
-    # Click button to change language
-    logger.debug("Clicking review language 'change' button")
-    parent_elt.find_element_by_css_selector('a').click()
-    # Select language
-    select = Select(WebDriverWait(driver, 10).until(
-        lambda _: parent_elt.find_element_by_css_selector('select')))
-    if not langs:
-        logger.debug("Populating language code map")
-        for opt in select.options[3:]:
-            langs[opt.text] = opt.get_attribute('value')
-    if lang in langs:
-        value = langs[lang]
-        select_by_value(select, value,
-                        "Selecting review language %r (%s)", lang, value)
-    else:  # (blank)
-        logger.debug("Selecting review language %r", lang)
-        select.select_by_visible_text(lang)
-    # Ensure "Make default" checkbox is unchecked
-    cbox_elt = parent_elt.find_element_by_css_selector(
-        'input[name="makedefault"]')
-    if cbox_elt.is_selected():
-        logger.debug("Deselecting review language 'Make default' checkbox")
-        cbox_elt.click()
+        except Exception:
+            pass
 
+        print("Log in to LibraryThing, then press enter")
+        input()
 
-custom_formats = {}  # Map from format code to select value
+        with open('cookies.json', 'w') as f:
+            json.dump(driver.get_cookies(), f)
 
+    def set_author_role(self, scope, elt_id, text):
+        """Set author role with the given element id."""
+        select = Select(scope.find_element_by_id(elt_id))
+        if not text:
+            select_by_value(select, '', "Clearing author role %r", elt_id)
+            return
+        if select.first_selected_option.text == text:
+            return  # Already selected
+        available = {option.text for option in select.options[2:-2]}
+        if text in available:
+            logger.debug("Setting author role %r to %r", elt_id, text)
+            select.select_by_visible_text(text)
+        else:
+            # Add new role
+            logger.debug("Setting author role %r to custom value %r",
+                         elt_id, text)
+            select.select_by_value('xxxOTHERxxx')
+            alert = self.wait_until(EC.alert_is_present())
+            alert.send_keys(text)
+            alert.accept()
 
-def select_format(select, format_data):
-    format_code = format_data['code']
-    value = custom_formats.get(format_code, format_code)
-    if value not in (opt.get_attribute('value') for opt in select.options):
-        return False
-    select_by_value(select, value,
-                    "Selecting media type %r (%s)", format_data['text'], value)
-    return True
+    def set_author(self, scope, name_id, role_id, author):
+        """Set author with the given name/role element ids."""
+        author = author or {}
+        set_text(scope, name_id, author.get('lf'))
+        self.set_author_role(scope, role_id, author.get('role'))
 
+    def set_other_authors(self, sauthors):
+        """Set secondary authors."""
+        sauthors = sauthors or []
+        num_authors = len(sauthors)
 
-def select_custom_format(select, format_data):
-    format_text = format_data['text']
-    format_code = format_data['code']
-    indent = '\u2003' * format_code.count('.')
-    format_text_indented = f'{indent}{format_text}'
-    pvalue, _ = format_code.rsplit('.', 1)
-    popt = None
-    for opt in select.options[5:]:
-        if not popt:  # First scan list for parent format
-            if opt.get_attribute('value') == pvalue:
-                popt = opt
-        else:  # Then look for custom format under parent format
-            # Get text with whitespace since we need to check the indent
-            opt_text = opt.get_attribute("textContent")
-            if not opt_text.startswith(indent):
+        # Find relevant form elements
+        parent = self.driver.find_element_by_id('bookedit_roles')
+        num_rows = len(parent.find_elements_by_class_name('bookPersonName'))
+        add_row_link = (parent.find_element_by_id('addPersonControl')
+                        .find_element_by_tag_name('a'))
+
+        idx = 0
+        for idx, author in enumerate(sauthors):
+            # Add rows as needed
+            if idx >= num_rows:
+                logger.debug("Clicking 'add another author'")
+                add_row_link.click()
+                self.wait_until(EC.presence_of_element_located(
+                    (By.ID, f"person_name-{idx}")))
+            self.set_author(
+                parent, f'person_name-{idx}', f'person_role-{idx}', author)
+
+        # Clear any extra rows
+        for idx in range(num_authors, num_rows):
+            self.set_author(
+                parent, f'person_name-{idx}', f'person_role-{idx}', None)
+
+    def set_tags(self, tags):
+        """Set tags."""
+        # TODO: Make extra tag configurable
+        field = set_text(self.driver, 'form_tags',
+                         ','.join((tags or []) + ['ltji']))
+        defocus(field)  # Defocus text field to avoid autocomplete popup
+
+    def set_rating(self, rating):
+        """Set star rating."""
+        star = math.ceil(rating) or 1  # Which star to click on
+        target = str(int(rating * 2))
+        parent = self.driver.find_element_by_xpath(
+            '//*[@id="form_rating"]/../..')
+        # Click up to 3 times until rating reaches desired value
+        for _ in range(3):
+            rating_elt = parent.find_element_by_id('form_rating')
+            if rating_elt.get_attribute('value') == target:
                 break
-            if opt_text == format_text_indented:
-                value = opt.get_attribute('value')
-                select_by_value(select, value,
-                                "Selecting media type %r (%s), "
-                                "nested under %r (%s)",
-                                format_text, value, popt.text, pvalue)
-                custom_formats[format_code] = value
-                return True
-    return False
+            star_elt = get_parent(rating_elt).find_element_by_css_selector(
+                f':scope > img:nth-of-type({star})')
+            logger.debug("Clicking rating star %d", star)
+            star_elt.click()
+            # Opacity is set to 0.3 while updating, then to 1 on success
+            self.wait_until(
+                lambda _: ('opacity', '1') in get_inline_styles(parent))
+        else:
+            rating_elt = parent.find_element_by_id('form_rating')
+            if rating_elt.get_attribute('value') != target:
+                raise RuntimeError("Failed to set rating")
 
+    langs = {}  # Map of language strings to selection values
 
-def set_format(driver, format_data):
-    parent = driver.find_element_by_id('mediatypemenus')
-    complete = 'showmediatypeall' in get_class_list(parent)
-    select = Select(parent.find_element_by_id(
-        'mediatype_all' if complete else 'mediatype'))
-    if not format_data:
-        select_by_value(select, '', "Clearing media type")
-        return
-    if select_format(select, format_data):
-        return
-    if not complete:
-        # Retry with complete list
-        logger.debug("Selecting 'Show complete list' in media type menu")
-        select.select_by_value('showcomplete')
-        select = Select(parent.find_element_by_id('mediatype_all'))
-        if select_format(select, format_data):
+    def set_review_language(self, lang):
+        """Set review language."""
+        if not lang:
             return
-    format_text = format_data['text']
-    format_code = format_data['code']
-    if '.X_m' in format_code and format_code not in custom_formats:
-        # Try to find custom format by name
-        if select_custom_format(select, format_data):
+        parent_elt = self.driver.find_element_by_id(
+            'ajax_choose_reviewlanguage')
+        # Check if correct language is already set
+        if lang in self.langs:
+            lang_elt = parent_elt.find_element_by_css_selector(
+                'input[name="language"]')
+            if lang_elt.get_attribute('value') == self.langs[lang]:
+                return
+        # Click button to change language
+        logger.debug("Clicking review language 'change' button")
+        parent_elt.find_element_by_css_selector('a').click()
+        # Select language
+        select = Select(self.wait_until(
+            lambda _: parent_elt.find_element_by_css_selector('select')))
+        if not self.langs:
+            logger.debug("Populating language code map")
+            for opt in select.options[3:]:
+                self.langs[opt.text] = opt.get_attribute('value')
+        if lang in self.langs:
+            value = self.langs[lang]
+            select_by_value(select, value,
+                            "Selecting review language %r (%s)", lang, value)
+        else:  # (blank)
+            logger.debug("Selecting review language %r", lang)
+            select.select_by_visible_text(lang)
+        # Ensure "Make default" checkbox is unchecked
+        cbox_elt = parent_elt.find_element_by_css_selector(
+            'input[name="makedefault"]')
+        if cbox_elt.is_selected():
+            logger.debug("Deselecting review language 'Make default' checkbox")
+            cbox_elt.click()
+
+    custom_formats = {}  # Map from format code to select value
+
+    def select_format(self, select, format_data):
+        """Select media type by code value."""
+        format_code = format_data['code']
+        value = self.custom_formats.get(format_code, format_code)
+        if value not in (opt.get_attribute('value') for opt in select.options):
+            return False
+        select_by_value(select, value,
+                        "Selecting media type %r (%s)",
+                        format_data['text'], value)
+        return True
+
+    def select_custom_format(self, select, format_data):
+        """Select custom media type by name and parent code."""
+        format_text = format_data['text']
+        format_code = format_data['code']
+        indent = '\u2003' * format_code.count('.')
+        format_text_indented = f'{indent}{format_text}'
+        pvalue, _ = format_code.rsplit('.', 1)
+        popt = None
+        for opt in select.options[5:]:
+            if not popt:  # First scan list for parent format
+                if opt.get_attribute('value') == pvalue:
+                    popt = opt
+            else:  # Then look for custom format under parent format
+                # Get text with whitespace since we need to check the indent
+                opt_text = opt.get_attribute("textContent")
+                if not opt_text.startswith(indent):
+                    break
+                if opt_text == format_text_indented:
+                    value = opt.get_attribute('value')
+                    select_by_value(select, value,
+                                    "Selecting media type %r (%s), "
+                                    "nested under %r (%s)",
+                                    format_text, value, popt.text, pvalue)
+                    self.custom_formats[format_code] = value
+                    return True
+        return False
+
+    def set_format(self, format_data):
+        """Set media type."""
+        parent = self.driver.find_element_by_id('mediatypemenus')
+        complete = 'showmediatypeall' in get_class_list(parent)
+        select = Select(parent.find_element_by_id(
+            'mediatype_all' if complete else 'mediatype'))
+        if not format_data:
+            select_by_value(select, '', "Clearing media type")
             return
-        # Add new media type
-        logger.debug("Selecting 'Add media' in media type menu")
-        select.select_by_value('addmedia')
-        set_text(parent, 'newmedia', format_text)
-        set_select(parent, 'nestunder', format_code.rsplit('.', 1)[0])
-    else:
-        raise RuntimeError(f"Failed to set format {format_text!r} "
-                           "({format_code})")
+        if self.select_format(select, format_data):
+            return
+        if not complete:
+            # Retry with complete list
+            logger.debug("Selecting 'Show complete list' in media type menu")
+            select.select_by_value('showcomplete')
+            select = Select(parent.find_element_by_id('mediatype_all'))
+            if self.select_format(select, format_data):
+                return
+        format_text = format_data['text']
+        format_code = format_data['code']
+        if '.X_m' in format_code and format_code not in self.custom_formats:
+            # Try to find custom format by name
+            if self.select_custom_format(select, format_data):
+                return
+            # Add new media type
+            logger.debug("Selecting 'Add media' in media type menu")
+            select.select_by_value('addmedia')
+            set_text(parent, 'newmedia', format_text)
+            set_select(parent, 'nestunder', format_code.rsplit('.', 1)[0])
+        else:
+            raise RuntimeError(f"Failed to set format {format_text!r} "
+                               "({format_code})")
 
-
-def set_multirow(scope, items, rows, set_fn, add_fn, delete_fn):
-    num_items = len(items)
-    num_rows = len(rows)
-    # Populate data, adding new rows as needed
-    row = None
-    for i, item in enumerate(items):
-        row = rows[i] if i < num_rows else add_fn(scope, i, row)
-        set_fn(scope, i, row, item)
-    # Delete extra rows
-    for i in range(num_items, num_rows):
-        delete_fn(scope, i, rows[i])
-
-
-def set_multirow_fs(scope, items, set_fn, term):
-    def add_fs(scope, i, fs):
-        fsid = fs.get_attribute('id')
+    def mr_add(self, scope, i, pfs, term):
+        """Add a new fieldset to a muti-row section."""
+        fsid = pfs.get_attribute('id')
         logger.debug("Adding %s %d", term, i+1)
-        fs.find_element_by_id(f'arb_{fsid}').click()
-        return WebDriverWait(get_driver(scope), 10).until(
+        pfs.find_element_by_id(f'arb_{fsid}').click()
+        return self.wait_until(
             lambda _: scope.find_element_by_css_selector(
                 f':scope > fieldset:nth-of-type({i+1})'))
 
-    def del_fs(scope, i, fs):
+    def mr_del(self, scope, i, fs, term):
+        """Delete a fieldset of a multi-row section."""
         fsid = fs.get_attribute('id')
         logger.debug("Removing %s %d", term, i+1)
         fs.find_element_by_id(f'arbm_{fsid}').click()
-        WebDriverWait(get_driver(scope), 10).until(
+        self.wait_until(
             lambda _: ('display', 'none') in get_inline_styles(fs))
 
-    rows = scope.find_elements_by_tag_name('fieldset')
-    set_multirow(scope, items, rows, set_fn, add_fs, del_fs)
+    def set_multirow(self, scope, items, set_fn, term):
+        """Set multi-row data."""
+        rows = scope.find_elements_by_tag_name('fieldset')
+        num_items = len(items)
+        num_rows = len(rows)
+        # Populate data, adding new rows as needed
+        row = None
+        for i, item in enumerate(items):
+            row = rows[i] if i < num_rows else self.mr_add(scope, i, row, term)
+            set_fn(scope, i, row, item)
+        # Delete extra rows
+        for i in range(num_items, num_rows):
+            self.mr_del(scope, i, rows[i], term)
 
+    digits = frozenset('0123456789')
+    rn_digits = frozenset('ivxlcdm')
 
-digits = frozenset('0123456789')
-rn_digits = frozenset('ivxlcdm')
+    def guess_page_type(self, num):
+        """Guess the page type from a given page number value."""
+        num_chars = set(num.lower())
+        if num_chars <= self.digits:
+            return '1,2,3,...', '0'
+        if num_chars <= self.rn_digits:
+            return 'i,ii,iii,...', '1'
+        return 'other', '4'
 
-
-def guess_page_type(num):
-    num_chars = set(num.lower())
-    if num_chars <= digits:
-        return '1,2,3,...', '0'
-    if num_chars <= rn_digits:
-        return 'i,ii,iii,...', '1'
-    return 'other', '4'
-
-
-def set_pagination(scope, i, fieldset, num):
-    count_elt = fieldset.find_element_by_css_selector(
-        'input[name="pagecount"]')
-    type_elt = Select(fieldset.find_element_by_tag_name('select'))
-    if not num:
-        # Clear fieldset
-        if count_elt.get_attribute('value'):
-            logger.debug("Clearing pagination %d", i+1)
+    def set_pagination(self, scope, i, fieldset, num):
+        """Set a pagination item."""
+        count_elt = fieldset.find_element_by_css_selector(
+            'input[name="pagecount"]')
+        type_elt = Select(fieldset.find_element_by_tag_name('select'))
+        if not num:
+            # Clear fieldset
+            if count_elt.get_attribute('value'):
+                logger.debug("Clearing pagination %d", i+1)
+                count_elt.clear()
+            return
+        if count_elt.get_attribute('value') != num:
+            logger.debug("Setting pagination %d to %r", i+1, num)
             count_elt.clear()
-        return
-    if count_elt.get_attribute('value') != num:
-        logger.debug("Setting pagination %d to %r", i+1, num)
-        count_elt.clear()
-        count_elt.send_keys(num)
-    pt_name, pt_value = guess_page_type(num)
-    select_by_value(type_elt, pt_value,
-                    "Setting type of pagination %d to %r (%s)",
-                    i+1, pt_name, pt_value)
+            count_elt.send_keys(num)
+        pt_name, pt_value = self.guess_page_type(num)
+        select_by_value(type_elt, pt_value,
+                        "Setting type of pagination %d to %r (%s)",
+                        i+1, pt_name, pt_value)
 
+    def set_paginations(self, pages):
+        """Set pagination."""
+        parent = self.driver.find_element_by_id('bookedit_pages')
+        pagenums = [p.strip() for p in (pages or '').split(';')]
+        self.set_multirow(parent, pagenums, self.set_pagination, 'pagination')
 
-def set_paginations(driver, pages):
-    parent = driver.find_element_by_id('bookedit_pages')
-    pagenums = [p.strip() for p in (pages or '').split(';')]
-    set_multirow_fs(parent, pagenums, set_pagination, 'pagination')
+    def get_dim_unit(self, dim):
+        """Get the unit of a dimension."""
+        _, unit = dim.split()
+        if unit in ('inch', 'inches'):
+            return 'inch', '0'
+        if unit == 'cm':
+            return 'cm', '1'
+        raise ValueError(f"Unknown unit: {unit!r}")
 
+    def set_dimension(self, scope, i, fs, hlt):
+        """Set a dimension item."""
+        fsid = fs.get_attribute('id')
+        height, length, thickness = hlt
+        # Set or clear dimension text fields
+        for dim, pfx in ((height, 'pdh'), (length, 'pdl'), (thickness, 'pdt')):
+            num, _ = dim.split() if dim else ('', None)
+            set_text(fs, f'{pfx}_{fsid}', num)
+        dim = height or length or thickness
+        if dim:
+            # Set dimension units
+            unit, uvalue = self.get_dim_unit(dim)
+            select = Select(fs.find_element_by_id(f'pdu_{fsid}'))
+            select_by_value(select, uvalue,
+                            "Setting unit of dimension %d to %r (%s)",
+                            i+1, unit, uvalue)
 
-def get_dim_unit(dim):
-    _, unit = dim.split()
-    if unit in ('inch', 'inches'):
-        return 'inch', '0'
-    if unit == 'cm':
-        return 'cm', '1'
-    raise ValueError(f"Unknown unit: {unit!r}")
+    def set_dimensions(self, height, length, thickness):
+        """Set dimensions."""
+        parent = self.driver.find_element_by_id('bookedit_phys_dims')
+        dimensions = [(height, length, thickness)]
+        self.set_multirow(parent, dimensions, self.set_dimension, 'dimension')
 
+    def get_weight_unit(self, unit):
+        """Get a unit of weight."""
+        if unit in ('pound', 'pounds'):
+            return 'pounds', '0'
+        if unit == 'kg':
+            return 'kg', '1'
+        raise ValueError(f"Unknown unit: {unit!r}")
 
-def set_dimension(scope, i, fs, hlt):
-    fsid = fs.get_attribute('id')
-    height, length, thickness = hlt
-    # Set or clear dimension text fields
-    for dim, pfx in ((height, 'pdh'), (length, 'pdl'), (thickness, 'pdt')):
-        num, _ = dim.split() if dim else ('', None)
-        set_text(fs, f'{pfx}_{fsid}', num)
-    dim = height or length or thickness
-    if dim:
-        # Set dimension units
-        unit, uvalue = get_dim_unit(dim)
-        select = Select(fs.find_element_by_id(f'pdu_{fsid}'))
-        select_by_value(select, uvalue,
-                        "Setting unit of dimension %d to %r (%s)",
-                        i+1, unit, uvalue)
-
-
-def set_dimensions(driver, height, length, thickness):
-    parent = driver.find_element_by_id('bookedit_phys_dims')
-    dimensions = [(height, length, thickness)]
-    set_multirow_fs(parent, dimensions, set_dimension, 'dimension')
-
-
-def get_weight_unit(unit):
-    if unit in ('pound', 'pounds'):
-        return 'pounds', '0'
-    if unit == 'kg':
-        return 'kg', '1'
-    raise ValueError(f"Unknown unit: {unit!r}")
-
-
-def set_weight(scope, i, fs, wstr):
-    weight_elt = fs.find_element_by_css_selector('input[name="weight"]')
-    if not wstr:
-        # Clear value field
-        if weight_elt.get_attribute('value'):
-            logger.debug("Clearing weight %d", i+1)
+    def set_weight(self, scope, i, fs, wstr):
+        """Set a weight item."""
+        weight_elt = fs.find_element_by_css_selector('input[name="weight"]')
+        if not wstr:
+            # Clear value field
+            if weight_elt.get_attribute('value'):
+                logger.debug("Clearing weight %d", i+1)
+                weight_elt.clear()
+            return
+        # Set value field
+        num, unit = wstr.split()
+        if weight_elt.get_attribute('value') != num:
+            logger.debug("Setting weight %d to %r", i+1, num)
             weight_elt.clear()
-        return
-    # Set value field
-    num, unit = wstr.split()
-    if weight_elt.get_attribute('value') != num:
-        logger.debug("Setting weight %d to %r", i+1, num)
-        weight_elt.clear()
-        weight_elt.send_keys(num)
-    # Set unit
-    uname, uvalue = get_weight_unit(unit)
-    unit_elt = Select(fs.find_element_by_tag_name('select'))
-    select_by_value(unit_elt, uvalue,
-                    "Setting unit of weight %d to %r (%s)", i+1, uname, uvalue)
+            weight_elt.send_keys(num)
+        # Set unit
+        uname, uvalue = self.get_weight_unit(unit)
+        unit_elt = Select(fs.find_element_by_tag_name('select'))
+        select_by_value(unit_elt, uvalue,
+                        "Setting unit of weight %d to %r (%s)",
+                        i+1, uname, uvalue)
 
+    def set_weights(self, weight_str):
+        """Set weights."""
+        parent = self.driver.find_element_by_id('bookedit_weights')
+        weights = [w.strip() for w in (weight_str or '').split(';')]
+        self.set_multirow(parent, weights, self.set_weight, 'weight')
 
-def set_weights(driver, weight_str):
-    parent = driver.find_element_by_id('bookedit_weights')
-    weights = [w.strip() for w in (weight_str or '').split(';')]
-    set_multirow_fs(parent, weights, set_weight, 'weight')
+    def set_language(self, term, elt_id, lang, lang_code):
+        """Set a language field specified by id."""
+        parent = self.driver.find_element_by_id(elt_id)
+        select = Select(parent.find_element_by_tag_name('select'))
+        if not lang:
+            select_by_value(select, '', "Clearing %s language", term)
+            return
+        if lang_code not in (opt.get_attribute('value')
+                             for opt in select.options):
+            # Didn't find the language code, try switching to all langauges
+            logger.debug("Clicking 'show all languages' link")
+            parent.find_element_by_css_selector('.bookEditHint > a').click()
+            select = Select(self.wait_until(
+                lambda wd: parent.find_element_by_tag_name('select')))
+        select_by_value(select, lang_code,
+                        "Selecting %s language %r (%s)", term, lang, lang_code)
 
+    def set_reading_dates(self, date_started, date_finished):
+        """Set reading dates."""
+        parent = self.driver.find_element_by_id('startedfinished')
+        rows = parent.find_elements_by_css_selector(
+            'table.startedfinished > tbody > tr:not(.hidden)')
+        set_text(parent, 'dr_start_1', date_started)
+        set_text(parent, 'dr_end_1', date_finished)
+        for i in range(1, len(rows)):
+            set_text(parent, f'dr_start_{i+1}', None)
+            set_text(parent, f'dr_end_{i+1}', None)
 
-def set_language(driver, term, elt_id, lang, lang_code):
-    parent = driver.find_element_by_id(elt_id)
-    select = Select(parent.find_element_by_tag_name('select'))
-    if not lang:
-        select_by_value(select, '', "Clearing %s language", term)
-        return
-    if lang_code not in (opt.get_attribute('value') for opt in select.options):
-        # Didn't find the language code, so click the "show all languages" link
-        logger.debug("Clicking 'show all languages' link")
-        parent.find_element_by_css_selector('.bookEditHint > a').click()
-        select = Select(WebDriverWait(driver, 10).until(
-            lambda wd: parent.find_element_by_tag_name('select')))
-    select_by_value(select, lang_code,
-                    "Selecting %s language %r (%s)", term, lang, lang_code)
-
-
-def set_reading_dates(driver, date_started, date_finished):
-    parent = driver.find_element_by_id('startedfinished')
-    rows = parent.find_elements_by_css_selector(
-        'table.startedfinished > tbody > tr:not(.hidden)')
-    set_text(parent, 'dr_start_1', date_started)
-    set_text(parent, 'dr_end_1', date_finished)
-    for i in range(1, len(rows)):
-        set_text(parent, f'dr_start_{i+1}', None)
-        set_text(parent, f'dr_end_{i+1}', None)
-
-
-def parse_from_where(scope):
-    outer_div = scope.find_element_by_css_selector(
-        ':scope > div[class="location"]')
-    # Three possible variants
-    # - No location: text with one 'a' tag
-    # - Free-text location: div containing one 'a' tag
-    # - Venue: div containing two 'a' tags
-    inner_div, = outer_div.find_elements_by_tag_name('div') or [None]
-    if inner_div:
-        anchors = inner_div.find_elements_by_tag_name('a')
-        if len(anchors) == 1:
-            # Free text location
-            change_link = anchors[0]
-            location = inner_div.text[:len(change_link.text) + 3]
-        elif len(anchors) == 2:
-            # Venue
-            location = anchors[0].text
-            change_link = anchors[1]
+    def parse_from_where(self, scope):
+        """Find the current "From where?" value and "change"/"edit" link."""
+        outer_div = scope.find_element_by_css_selector(
+            ':scope > div[class="location"]')
+        # Three possible variants
+        # - No location: text with one 'a' tag
+        # - Free-text location: div containing one 'a' tag
+        # - Venue: div containing two 'a' tags
+        inner_div, = outer_div.find_elements_by_tag_name('div') or [None]
+        if inner_div:
+            anchors = inner_div.find_elements_by_tag_name('a')
+            if len(anchors) == 1:
+                # Free text location
+                change_link = anchors[0]
+                location = inner_div.text[:len(change_link.text) + 3]
+            elif len(anchors) == 2:
+                # Venue
+                location = anchors[0].text
+                change_link = anchors[1]
+            else:
+                raise RuntimeError("Unable to parse location field")
         else:
-            raise RuntimeError("Unable to parse location field")
-    else:
-        # No location
-        location = ''
-        change_link = scope.find_element_by_tag_name('a')
+            # No location
+            location = ''
+            change_link = scope.find_element_by_tag_name('a')
 
-    return location, change_link
+        return location, change_link
 
-
-def set_from_where(driver, from_where):
-    parent = driver.find_element_by_id('bookedit_datestarted')
-    location, change_link = parse_from_where(parent)
-    if not from_where:
-        if location:
-            logger.debug("Clicking location %r link", change_link.text)
-            change_link.click()
-            popup = WebDriverWait(driver, 10).until(
-                EC.presence_of_element_located((By.ID, "pickrecommendations")))
-            remove_link = popup.find_element_by_css_selector(
-                ':scope > p:nth-of-type(3) > a')
-            logger.debug("Clicking location remove link")
-            remove_link.click()
-            WebDriverWait(driver, 10).until(EC.staleness_of(popup))
-        return
-    if location != from_where:
+    def open_location_popup(self, change_link):
+        """Open the location editing popup."""
         logger.debug("Clicking location %r link", change_link.text)
         change_link.click()
-        popup = WebDriverWait(driver, 10).until(
+        return self.wait_until(
             EC.presence_of_element_located((By.ID, "pickrecommendations")))
-        # Check if venue is already used
+
+    def clear_location(self, popup):
+        """Remove the current location value."""
+        # Unfortunately this element has no distinguishing id or class
+        # attributes so we have to specify it by position in the tree
+        remove_link = popup.find_element_by_css_selector(
+            ':scope > p:nth-of-type(3) > a')
+        logger.debug("Clicking location remove link")
+        remove_link.click()
+
+    def select_already_used_location(self, popup, from_where):
+        """Select a location from the already used location list."""
         locations = popup.find_elements_by_css_selector(
             '#locationlist > p > a:nth-of-type(1)')
         for anchor in locations:
             if anchor.text == from_where:
                 logger.debug("Selecting already used venue %r", from_where)
                 anchor.click()
-                WebDriverWait(driver, 10).until(EC.staleness_of(popup))
-                return
-        # Search for venue by name
-        # TODO: Make this optional with config flag
+                self.wait_until(EC.staleness_of(popup))
+                return True
+        return False
+
+    def venue_search(self, popup, from_where):
+        """Search for a venue by name."""
         logger.debug("Choosing 'Venue search' tab")
         popup.find_element_by_id('lbtabchromemenu1').click()
         form = popup.find_element_by_id('venuesearchform')
@@ -559,17 +578,19 @@ def set_from_where(driver, from_where):
         logger.debug("Clicking search button")
         submit_button.click()
         results = popup.find_element_by_id('venuelist')
-        WebDriverWait(driver, 10).until(
-            lambda _: 'updating' not in get_class_list(results))
+        self.wait_until(lambda _: 'updating' not in get_class_list(results))
         venues = results.find_elements_by_css_selector(
             ':scope > p > a:nth-of-type(1)')
         for anchor in venues:
             if anchor.text == from_where:
                 logger.debug("Selecting venue %r", from_where)
                 anchor.click()
-                WebDriverWait(driver, 10).until(EC.staleness_of(popup))
-                return
-        # Enter location as free text
+                self.wait_until(EC.staleness_of(popup))
+                return True
+        return False
+
+    def set_from_where_free_text(self, popup, from_where):
+        """Enter a free-text location value."""
         logger.debug("Choosing 'Free text' tab")
         popup.find_element_by_id('lbtabchromemenu2').click()
         form = popup.find_element_by_id('freetextform')
@@ -578,153 +599,185 @@ def set_from_where(driver, from_where):
             'input[name="Submit"]')
         logger.debug("Saving location")
         submit_button.click()
-        WebDriverWait(driver, 10).until(EC.staleness_of(popup))
 
+    def set_location(self, popup, from_where):
+        """Use the location editing pop-up to set a location."""
+        # Check if venue is already used
+        if self.select_already_used_location(popup, from_where):
+            return
+        # Search for venue by name
+        # TODO: Make this optional with config flag
+        if self.search_for_venue(popup, from_where):
+            return
+        # Enter location as free text
+        self.set_from_where_free_text(popup, from_where)
 
-def set_physical_description(driver, physical_description):
-    try:
-        set_text(driver, 'phys_summary', physical_description)
-    except NoSuchElementException:  # Add books form doesn't have this field
-        if physical_description:
-            logger.warning("Unable to set physical description")
+    def set_from_where(self, from_where):
+        """Set the "From where?" field."""
+        parent = self.driver.find_element_by_id('bookedit_datestarted')
+        location, change_link = self.parse_from_where(parent)
+        if not from_where:
+            if location:
+                popup = self.open_location_popup(change_link)
+                self.clear_location(popup)
+                self.wait_until(EC.staleness_of(popup))
+            return
+        if location != from_where:
+            popup = self.open_location_popup(change_link)
+            self.set_location(popup, from_where)
+            self.wait_until(EC.staleness_of(popup))
 
+    def set_physical_description(self, physical_description):
+        """Set the physical description field."""
+        try:
+            set_text(self.driver, 'phys_summary', physical_description)
+        except NoSuchElementException:
+            # Add books form doesn't have this field
+            # See https://www.librarything.com/topic/330379
+            if physical_description:
+                logger.warning("Unable to set physical description")
 
-def set_barcode(driver, barcode):
-    parent = driver.find_element_by_id('bookedit_barcode')
-    text_field = set_text(parent, 'item_inventory_barcode_1', barcode)
-    # Barcode field has an onblur event to check for duplicate book
-    defocus(text_field)
-    warning = parent.find_element_by_id('barcode_warning_1')
-    WebDriverWait(driver, 10).until(
-        lambda _: 'updating' not in get_class_list(warning))
+    def set_barcode(self, barcode):
+        """Set the barcode."""
+        parent = self.driver.find_element_by_id('bookedit_barcode')
+        text_field = set_text(parent, 'item_inventory_barcode_1', barcode)
+        # Barcode field has an onblur event to check for duplicate book
+        defocus(text_field)
+        # We don't currently use the warning but we need to wait for it to
+        # appear or it may interfere with saving the form.
+        warning = parent.find_element_by_id('barcode_warning_1')
+        self.wait_until(lambda _: 'updating' not in get_class_list(warning))
 
+    def set_bcid(self, bcid):
+        """Set the BCID."""
+        id1, id2 = bcid.split('-') if bcid else ('', '')
+        set_text(self.driver, 'form_bcid_1', id1)
+        set_text(self.driver, 'form_bcid_2', id2)
 
-def set_bcid(driver, bcid):
-    id1, id2 = bcid.split('-') if bcid else ('', '')
-    set_text(driver, 'form_bcid_1', id1)
-    set_text(driver, 'form_bcid_2', id2)
+    def save_changes(self):
+        """Save book edits."""
+        html = self.driver.find_element_by_tag_name('html')
+        self.driver.find_element_by_id('book_editTabTextSave2').click()
+        self.wait_until(EC.staleness_of(html))
 
+    def add_book(self, book_id, book_data):
+        """Add a new book using the manual entry form."""
+        logger.info("Adding book %s: %s", book_id, book_data['title'])
 
-def save_changes(driver):
-    html = driver.find_element_by_tag_name('html')
-    driver.find_element_by_id('book_editTabTextSave2').click()
-    WebDriverWait(driver, 10).until(EC.staleness_of(html))
+        self.driver.get('https://www.librarything.com/addnew.php')
 
+        # Title
+        set_text(self.driver, 'form_title', book_data['title'])
 
-def add_book(driver, book_id, book_data):
-    logger.info("Adding book %s: %s", book_id, book_data['title'])
+        # Sort character
+        set_select(self.driver, 'sortcharselector',
+                   # default selection has value "999"
+                   book_data.get('sortcharacter', '999'))
 
-    driver.get('https://www.librarything.com/addnew.php')
+        # Primary author
+        authors = book_data.get('authors')
+        pauthor = authors[0] if authors else None
+        self.set_author(self.driver, 'form_authorunflip', 'person_role--1',
+                        pauthor)
 
-    # Title
-    set_text(driver, 'form_title', book_data['title'])
+        # Tags
+        self.set_tags(book_data.get('tags'))
 
-    # Sort character
-    set_select(driver, 'sortcharselector',
-               # default selection has value "999"
-               book_data.get('sortcharacter', '999'))
+        # Collections
+        # TODO
 
-    # Primary author
-    authors = book_data.get('authors')
-    pauthor = authors[0] if authors else None
-    set_author(driver, 'form_authorunflip', 'person_role--1', pauthor)
+        # Rating
+        self.set_rating(book_data.get('rating', 0))
 
-    # Tags
-    set_tags(driver, book_data.get('tags'))
+        # Review
+        review = book_data.get('review')
+        set_text(self.driver, 'form_review', review)
+        self.set_review_language(book_data.get('reviewlang'))
 
-    # Collections
-    # TODO
+        # Other authors
+        sauthors = authors[1:] if authors else []
+        self.set_other_authors(sauthors)
 
-    # Rating
-    set_rating(driver, book_data.get('rating', 0))
+        # Format
+        self.set_format(get_path(book_data, 'format', 0))
 
-    # Review
-    review = book_data.get('review')
-    set_text(driver, 'form_review', review)
-    set_review_language(driver, book_data.get('reviewlang'))
+        # Publication details
+        set_text(self.driver, 'form_date', book_data.get('date'))
+        set_text(self.driver, 'form_publication', book_data.get('publication'))
+        set_text(self.driver, 'form_ISBN', book_data.get('originalisbn'))
 
-    # Other authors
-    sauthors = authors[1:] if authors else []
-    set_other_authors(driver, sauthors)
+        # Physical description
+        set_text(self.driver, 'numVolumes', book_data.get('volumes'))
+        set_text(self.driver, 'form_copies', book_data.get('copies'))
+        self.set_paginations(book_data.get('pages'))
+        self.set_dimensions(book_data.get('height'), book_data.get('length'),
+                            book_data.get('thickness'))
+        self.set_weights(book_data.get('weight'))
 
-    # Format
-    set_format(driver, get_path(book_data, 'format', 0))
+        # Languages
+        self.set_language('primary', 'bookedit_lang',
+                          get_path(book_data, 'language', 0),
+                          get_path(book_data, 'language_codeA', 0))
+        self.set_language('secondary', 'bookedit_lang2',
+                          get_path(book_data, 'language', 1),
+                          get_path(book_data, 'language_codeA', 1))
+        self.set_language('original', 'bookedit_lang_original',
+                          get_path(book_data, 'originallanguage', 0),
+                          get_path(book_data, 'originallanguage_codeA', -1))
 
-    # Publication details
-    set_text(driver, 'form_date', book_data.get('date'))
-    set_text(driver, 'form_publication', book_data.get('publication'))
-    set_text(driver, 'form_ISBN', book_data.get('originalisbn'))
+        # Reading dates
+        self.set_reading_dates(book_data.get('datestarted'),
+                               book_data.get('dateread'))
 
-    # Physical description
-    set_text(driver, 'numVolumes', book_data.get('volumes'))
-    set_text(driver, 'form_copies', book_data.get('copies'))
-    set_paginations(driver, book_data.get('pages'))
-    set_dimensions(driver, book_data.get('height'), book_data.get('length'),
-                   book_data.get('thickness'))
-    set_weights(driver, book_data.get('weight'))
+        # Date acquired
+        set_text(self.driver, 'form_datebought', book_data.get('dateacquired'))
 
-    # Languages
-    set_language(driver, 'primary', 'bookedit_lang',
-                 get_path(book_data, 'language', 0),
-                 get_path(book_data, 'language_codeA', 0))
-    set_language(driver, 'secondary', 'bookedit_lang2',
-                 get_path(book_data, 'language', 1),
-                 get_path(book_data, 'language_codeA', 1))
-    set_language(driver, 'original', 'bookedit_lang_original',
-                 get_path(book_data, 'originallanguage', 0),
-                 get_path(book_data, 'originallanguage_codeA', -1))
+        # From where
+        self.set_from_where(book_data.get('fromwhere'))
 
-    # Reading dates
-    set_reading_dates(driver, book_data.get('datestarted'),
-                      book_data.get('dateread'))
+        # Classification
+        set_text(self.driver, 'form_lccallnumber',
+                 get_path(book_data, 'lcc', 'code'))
+        set_text(self.driver, 'form_dewey',
+                 get_path(book_data, 'ddc', 'code', 0))
+        set_text(self.driver, 'form_btc_callnumber',
+                 get_path(book_data, 'callnumber', 0))
 
-    # Date acquired
-    set_text(driver, 'form_datebought', book_data.get('dateacquired'))
+        # Comments
+        set_text(self.driver, 'form_comments', book_data.get('comment'))
+        set_text(self.driver, 'form_privatecomment',
+                 book_data.get('privatecomment'))
 
-    # From where
-    set_from_where(driver, book_data.get('fromwhere'))
+        # Summary
+        # TODO: Make these optional via command-line flags
+        self.set_physical_description(book_data.get('physical_description'))
+        set_text(self.driver, 'form_summary', book_data.get('summary'))
 
-    # Classification
-    set_text(driver, 'form_lccallnumber',
-             get_path(book_data, 'lcc', 'code'))
-    set_text(driver, 'form_dewey',
-             get_path(book_data, 'ddc', 'code', 0))
-    set_text(driver, 'form_btc_callnumber',
-             get_path(book_data, 'callnumber', 0))
+        # Barcode
+        # TODO: Set book id as barcode if none specified
+        # TODO: Check for existing book
+        self.set_barcode(get_path(book_data, 'barcode', '1'))
+        self.set_bcid(book_data.get('bcid'))
 
-    # Comments
-    set_text(driver, 'form_comments', book_data.get('comment'))
-    set_text(driver, 'form_privatecomment', book_data.get('privatecomment'))
+        # JSON does not correctly indicate whether a book is private
+        if False:  # TODO: Command-line flag for this
+            set_checkbox(self.driver, 'books_private', True)
 
-    # Summary
-    # TODO: Make these optional via command-line flags
-    set_physical_description(driver, book_data.get('physical_description'))
-    set_text(driver, 'form_summary', book_data.get('summary'))
-
-    # Barcode
-    # TODO: Set book id as barcode if none specified
-    # TODO: Check for existing book
-    set_barcode(driver, get_path(book_data, 'barcode', '1'))
-    set_bcid(driver, book_data.get('bcid'))
-
-    # JSON does not correctly indicate whether a book is private
-    if False:  # TODO: Command-line flag for this
-        set_checkbox(driver, 'books_private', True)
-
-    save_changes(driver)
+        self.save_changes()
 
 
 def main(data):
+    """Import JSON data into LibraryThing."""
     success = False
 
     with webdriver.Firefox() as driver:
         # TODO: Improve error handling
+        ltdriver = LibraryThingDriver(driver)
         try:
-            driver.get('https://www.librarything.com/')
-            login(driver)
+            ltdriver.login()
             for book_id, book_data in data.items():
                 time.sleep(1)
-                add_book(driver, book_id, book_data)
+                ltdriver.add_book(book_id, book_data)
             success = True
         except KeyboardInterrupt as exc:
             sys.stderr.writelines(traceback.format_exception_only(

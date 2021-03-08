@@ -133,6 +133,10 @@ class LibraryThingRobot:
         """Wait up to 10 seconds for the given wait condition."""
         return WebDriverWait(self.driver, 10).until(condition)
 
+    def user_alert(self, message):
+        self.driver.execute_script("alert(arguments[0])", message)
+        WebDriverWait(self.driver, 60).until_not(EC.alert_is_present())
+
     def login(self):
         """Log in to LibraryThing."""
         driver = self.driver
@@ -146,6 +150,7 @@ class LibraryThingRobot:
                 driver.add_cookie(cookie)
             driver.get('https://www.librarything.com/home')
         if not urlparse(driver.current_url).path == '/home':
+            self.user_alert("[LTJI] Log in and complete robot check")
             logger.debug("Waiting for user login")
             WebDriverWait(self.driver, 180).until(
                 lambda wd: urlparse(wd.current_url).path == '/home')

@@ -530,12 +530,10 @@ class LibraryThingRobot:
             # Free text location or no location
             change_link = anchors[0]
             location = div.text[:-(len(change_link.text) + 2)].strip()
-            logger.debug("Free text location: %r", location)
         elif len(anchors) == 2:
             # Venue
             location = anchors[0].text
             change_link = anchors[1]
-            logger.debug("Venue: %r", location)
         else:
             raise RuntimeError("Unable to parse location field")
 

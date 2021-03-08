@@ -1,3 +1,4 @@
+import argparse
 import json
 import logging
 import math
@@ -86,6 +87,7 @@ def set_text(scope, elt_id, value):
         if elt.get_attribute('value'):
             logger.debug("Clearing text field %r", elt_id)
             elt.clear()
+            elt.send_keys('')
     return elt
 
 
@@ -118,8 +120,11 @@ def set_checkbox(scope, elt_id, selected):
     return checkbox
 
 
-class LibraryThingDriver:
-    def __init__(self, driver):
+class LibraryThingRobot:
+    """Class to perform automated flows on LibraryThing."""
+
+    def __init__(self, config, driver):
+        self.config = config
         self.driver = driver
 
     def wait_until(self, condition):
@@ -202,9 +207,10 @@ class LibraryThingDriver:
 
     def set_tags(self, tags):
         """Set tags."""
-        # TODO: Make extra tag configurable
-        field = set_text(self.driver, 'form_tags',
-                         ','.join((tags or []) + ['ltji']))
+        tags = tags or []
+        if self.config.tag:
+            tags.append(self.config.tag)
+        field = set_text(self.driver, 'form_tags', ", ".join(tags))
         defocus(field)  # Defocus text field to avoid autocomplete popup
 
     def set_rating(self, rating):
@@ -562,8 +568,10 @@ class LibraryThingDriver:
                 return True
         return False
 
-    def venue_search(self, popup, from_where):
+    def search_for_venue(self, popup, from_where):
         """Search for a venue by name."""
+        if self.config.no_venue_search:
+            return False
         logger.debug("Choosing 'Venue search' tab")
         popup.find_element_by_id('lbtabchromemenu1').click()
         form = popup.find_element_by_id('venuesearchform')
@@ -606,7 +614,6 @@ class LibraryThingDriver:
         if self.select_already_used_location(popup, from_where):
             return
         # Search for venue by name
-        # TODO: Make this optional with config flag
         if self.search_for_venue(popup, from_where):
             return
         # Enter location as free text
@@ -627,8 +634,10 @@ class LibraryThingDriver:
             self.set_location(popup, from_where)
             self.wait_until(EC.staleness_of(popup))
 
-    def set_physical_description(self, physical_description):
-        """Set the physical description field."""
+    def set_physical_summary(self, physical_description):
+        """Set the physical summary field."""
+        if self.config.auto_physical_summary:
+            physical_description = None
         try:
             set_text(self.driver, 'phys_summary', physical_description)
         except NoSuchElementException:
@@ -636,6 +645,12 @@ class LibraryThingDriver:
             # See https://www.librarything.com/topic/330379
             if physical_description:
                 logger.warning("Unable to set physical description")
+
+    def set_summary(self, summary):
+        """Set the summary field."""
+        if self.config.auto_summary:
+            summary = None
+        set_text(self.driver, 'form_summary', summary)
 
     def set_barcode(self, barcode):
         """Set the barcode."""
@@ -749,9 +764,8 @@ class LibraryThingDriver:
                  book_data.get('privatecomment'))
 
         # Summary
-        # TODO: Make these optional via command-line flags
-        self.set_physical_description(book_data.get('physical_description'))
-        set_text(self.driver, 'form_summary', book_data.get('summary'))
+        self.set_physical_summary(book_data.get('physical_description'))
+        self.set_summary(book_data.get('summary'))
 
         # Barcode
         # TODO: Set book id as barcode if none specified
@@ -760,24 +774,35 @@ class LibraryThingDriver:
         self.set_bcid(book_data.get('bcid'))
 
         # JSON does not correctly indicate whether a book is private
-        if False:  # TODO: Command-line flag for this
+        # We allow the user to specify this by a config flag
+        if self.config.private:
             set_checkbox(self.driver, 'books_private', True)
 
         self.save_changes()
 
 
-def main(data):
+# Map from browser name to WebDriver class
+DRIVERS = {
+    'firefox': webdriver.Firefox,
+    'chrome': webdriver.Chrome,
+    'ie': webdriver.Ie,
+    'edge': webdriver.Edge,
+    'opera': webdriver.Opera,
+    'safari': webdriver.Safari,
+}
+
+
+def main(config, data):
     """Import JSON data into LibraryThing."""
     success = False
-
-    with webdriver.Firefox() as driver:
+    with DRIVERS[config.browser]() as driver:
         # TODO: Improve error handling
-        ltdriver = LibraryThingDriver(driver)
+        ltrobot = LibraryThingRobot(config, driver)
         try:
-            ltdriver.login()
+            ltrobot.login()
             for book_id, book_data in data.items():
                 time.sleep(1)
-                ltdriver.add_book(book_id, book_data)
+                ltrobot.add_book(book_id, book_data)
             success = True
         except KeyboardInterrupt as exc:
             sys.stderr.writelines(traceback.format_exception_only(
@@ -792,10 +817,30 @@ def main(data):
 
 
 if __name__ == '__main__':
-    with open(sys.argv[1]) as f:
-        data = json.load(f)
+    parser = argparse.ArgumentParser(prog='ltji')
+    parser.add_argument('-v', '--verbose', action='store_true',
+                        help="Log additional debugging information.")
+    parser.add_argument('-b', '--browser', choices=DRIVERS,
+                        default='firefox', help="Browser to use")
+    parser.add_argument('-t', '--tag',
+                        help="Tag to add to all imported books.")
+    parser.add_argument('--no-venue-search', action='store_true',
+                        help="Don't search for venues when setting the "
+                        "'From where?' field")
+    parser.add_argument('--auto-physical-summary', action='store_true',
+                        help="Allow LibraryThing to auto-generate the "
+                        "'Physical summary' field")
+    parser.add_argument('--auto-summary', action='store_true',
+                        help="Allow LibraryThing to auto-generate the "
+                        "'Summary' field")
+    parser.add_argument('-p', '--private', action='store_true',
+                        help="Create private books")
+    parser.add_argument('file', help="File containing JSON book data.")
+    config = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
-    # TODO: Should be configurable
-    logger.setLevel(logging.DEBUG)
-    success = main(data)
+    if config.verbose:
+        logger.setLevel(logging.DEBUG)
+    with open(config.file) as f:
+        data = json.load(f)
+    success = main(config, data)
     exit(0 if success else 1)

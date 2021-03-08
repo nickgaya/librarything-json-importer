@@ -514,29 +514,21 @@ class LibraryThingRobot:
 
     def parse_from_where(self, scope):
         """Find the current "From where?" value and "change"/"edit" link."""
-        outer_div = scope.find_element_by_css_selector(
+        div = scope.find_element_by_css_selector(
             ':scope > div[class="location"]')
-        # Three possible variants
-        # - No location: text with one 'a' tag
-        # - Free-text location: div containing one 'a' tag
-        # - Venue: div containing two 'a' tags
-        inner_div, = outer_div.find_elements_by_tag_name('div') or [None]
-        if inner_div:
-            anchors = inner_div.find_elements_by_tag_name('a')
-            if len(anchors) == 1:
-                # Free text location
-                change_link = anchors[0]
-                location = inner_div.text[:len(change_link.text) + 3]
-            elif len(anchors) == 2:
-                # Venue
-                location = anchors[0].text
-                change_link = anchors[1]
-            else:
-                raise RuntimeError("Unable to parse location field")
+        anchors = div.find_elements_by_tag_name('a')
+        if len(anchors) == 1:
+            # Free text location or no location
+            change_link = anchors[0]
+            location = div.text[:-(len(change_link.text) + 2)].strip()
+            logger.debug("Free text location: %r", location)
+        elif len(anchors) == 2:
+            # Venue
+            location = anchors[0].text
+            change_link = anchors[1]
+            logger.debug("Venue: %r", location)
         else:
-            # No location
-            location = ''
-            change_link = scope.find_element_by_tag_name('a')
+            raise RuntimeError("Unable to parse location field")
 
         return location, change_link
 

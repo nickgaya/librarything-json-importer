@@ -791,6 +791,17 @@ DRIVERS = {
 }
 
 
+def iter_books(data, book_ids):
+    if book_ids:
+        for book_id in book_ids:
+            if book_id in data:
+                yield book_id, data[book_id]
+            else:
+                logger.warning("Book id %r not found in data", book_id)
+    else:
+        yield from data.items()
+
+
 def main(config, data):
     """Import JSON data into LibraryThing."""
     success = False
@@ -802,7 +813,7 @@ def main(config, data):
             ltrobot.login()
             with (open(config.errors_file, 'w') if config.errors_file
                   else nullcontext()) as ef:
-                for book_id, book_data in data.items():
+                for book_id, book_data in iter_books(data, config.book_ids):
                     time.sleep(1)
                     try:
                         ltrobot.add_book(book_id, book_data)
@@ -832,6 +843,11 @@ def main(config, data):
     return success
 
 
+def parse_list(value):
+    """Parse a list of values separated by commas or whitespace."""
+    return [w for v in value.split(',') for w in v.split()]
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(prog='ltji')
     parser.add_argument('-v', '--verbose', action='store_true',
@@ -846,6 +862,9 @@ if __name__ == '__main__':
                        help="Don't save or load cookies")
     parser.add_argument('-e', '--errors-file', help="Output file for list of "
                         "book ids with import errors")
+    parser.add_argument('-i', '--book-ids',
+                        help="Comma-separated list of book ids to import, or "
+                        "@filename to read ids from file")
     parser.add_argument('-t', '--tag',
                         help="Tag to add to all imported books.")
     parser.add_argument('--no-venue-search', action='store_true',
@@ -869,5 +888,12 @@ if __name__ == '__main__':
         logger.setLevel(logging.DEBUG)
     with open(config.file) as f:
         data = json.load(f)
+    if config.book_ids is not None:
+        if config.book_ids.startswith('@'):
+            with open(config.book_ids[1:]) as f:
+                config.book_ids = f.read()
+        config.book_ids = parse_list(config.book_ids)
+        if not config.book_ids:
+            raise ValueError("Empty list of book ids")
     success = main(config, data)
     exit(0 if success else 1)

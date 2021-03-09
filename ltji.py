@@ -3,13 +3,13 @@ import json
 import logging
 import math
 import os.path
-import sys
 import time
-import traceback
+from contextlib import nullcontext
 from urllib.parse import urlparse
 
 from selenium import webdriver
-from selenium.common.exceptions import NoSuchElementException
+from selenium.common.exceptions import (
+    NoSuchElementException, NoSuchWindowException)
 from selenium.webdriver.common.by import By
 from selenium.webdriver.remote.webdriver import WebDriver
 from selenium.webdriver.support import expected_conditions as EC
@@ -794,21 +794,38 @@ DRIVERS = {
 def main(config, data):
     """Import JSON data into LibraryThing."""
     success = False
+    imported = 0
+    errors = 0
     with DRIVERS[config.browser]() as driver:
-        # TODO: Improve error handling
         ltrobot = LibraryThingRobot(config, driver)
         try:
             ltrobot.login()
-            for book_id, book_data in data.items():
-                time.sleep(1)
-                ltrobot.add_book(book_id, book_data)
+            with (open(config.errors_file, 'w') if config.errors_file
+                  else nullcontext()) as ef:
+                for book_id, book_data in data.items():
+                    time.sleep(1)
+                    try:
+                        ltrobot.add_book(book_id, book_data)
+                    except NoSuchWindowException:
+                        raise  # Fatal error, halt import
+                    except Exception:
+                        logger.warning("Failed to import book %s", book_id,
+                                       exc_info=True)
+                        if ef:
+                            ef.write(book_id)
+                            ef.write('\n')
+                            ef.flush()
+                        errors += 1
+                    else:
+                        imported += 1
+            logger.info("%d books imported, %d errors", imported, errors)
             success = True
-        except KeyboardInterrupt as exc:
-            sys.stderr.writelines(traceback.format_exception_only(
-                type(exc), exc))
+        except KeyboardInterrupt:
+            logger.info("Interrupted, exiting")
         except Exception:
-            traceback.print_exc()
+            logger.error("Import failed with exception", exc_info=True)
         finally:
+            # TODO: Get rid of this at some point
             print("Press enter to exit")
             input()
 
@@ -827,6 +844,8 @@ if __name__ == '__main__':
     group.add_argument('--no-cookies-file', dest='cookies_file',
                        action='store_const', const='',
                        help="Don't save or load cookies")
+    parser.add_argument('-e', '--errors-file', help="Output file for list of "
+                        "book ids with import errors")
     parser.add_argument('-t', '--tag',
                         help="Tag to add to all imported books.")
     parser.add_argument('--no-venue-search', action='store_true',

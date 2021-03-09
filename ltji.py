@@ -635,7 +635,7 @@ class LibraryThingRobot:
 
     def set_physical_summary(self, physical_description):
         """Set the physical summary field."""
-        if self.config.auto_physical_summary:
+        if self.config.physical_summary == 'auto':
             physical_description = None
         try:
             set_text(self.driver, 'phys_summary', physical_description)
@@ -647,7 +647,7 @@ class LibraryThingRobot:
 
     def set_summary(self, summary):
         """Set the summary field."""
-        if self.config.auto_summary:
+        if self.config.summary == 'auto':
             summary = None
         set_text(self.driver, 'form_summary', summary)
 
@@ -832,12 +832,15 @@ if __name__ == '__main__':
     parser.add_argument('--no-venue-search', action='store_true',
                         help="Don't search for venues when setting the "
                         "'From where?' field")
-    parser.add_argument('--auto-physical-summary', action='store_true',
-                        help="Allow LibraryThing to auto-generate the "
-                        "'Physical summary' field")
-    parser.add_argument('--auto-summary', action='store_true',
-                        help="Allow LibraryThing to auto-generate the "
-                        "'Summary' field")
+    parser.add_argument('--physical-summary', choices=('auto', 'json'),
+                        default='auto', help="How to set the 'Physical "
+                        "summary' field: 'auto', leave blank for LibraryThing "
+                        "to auto-generate; 'json', use the value from the "
+                        "JSON data")
+    parser.add_argument('--summary', choices=('auto', 'json'),
+                        default='auto', help="How to set the 'Summary' field: "
+                        "'auto', leave blank for LibraryThing to auto-"
+                        "generate; 'json', use the value from the JSON data")
     parser.add_argument('-p', '--private', action='store_true',
                         help="Create private books")
     parser.add_argument('file', help="File containing JSON book data.")

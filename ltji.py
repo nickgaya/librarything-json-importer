@@ -72,6 +72,11 @@ def defocus(elt):
     get_driver(elt).execute_script("arguments[0].blur()", elt)
 
 
+def page_loaded_condition(driver):
+    """Expected condition for page load."""
+    return driver.execute_script("return document.readyState") == 'complete'
+
+
 def set_text(scope, elt_id, value):
     """Set the value of a text element by id."""
     elt = scope.find_element_by_id(elt_id)
@@ -221,6 +226,87 @@ class LibraryThingRobot:
             tags.append(self.config.tag)
         field = set_text(self.driver, 'form_tags', ", ".join(tags))
         defocus(field)  # Defocus text field to avoid autocomplete popup
+
+    def parse_collections(self, scope):
+        """Parse the list of collection checkboxes."""
+        cbs = {}
+        for div in scope.find_elements_by_css_selector('div.cb'):
+            if not div.is_displayed():
+                continue
+            cb = div.find_element_by_css_selector('input[type="checkbox"]')
+            label = div.find_element_by_css_selector('span.lab')
+            cbs[label.text] = cb
+        return cbs
+
+    def show_all_collections(self, scope):
+        buttons = scope.find_elements_by_css_selector(
+            '.collectionListFooter .ltbtn')
+        if len(buttons) != 2:
+            raise RuntimeError(f"Unexpected button count: {len(buttons)}")
+        show_button = buttons[0]
+        sbpid = get_parent(show_button).get_attribute('id')
+        assert sbpid.startswith('collsa_')
+        cb_div = scope.find_element_by_id(sbpid[7:])
+        logger.debug("Clicking 'show all' collections button")
+        show_button.click()
+        self.wait_until(
+            lambda _: ('overflow', 'visible') in get_inline_styles(cb_div))
+
+    def add_collections(self, scope, to_add):
+        """Create new collections."""
+        buttons = scope.find_elements_by_css_selector(
+            '.collectionListFooter .ltbtn')
+        if len(buttons) != 2:
+            raise RuntimeError(f"Unexpected button count: {len(buttons)}")
+        logger.debug("Clicking 'edit collections' button")
+        buttons[1].click()
+        lb_loading = self.driver.find_element_by_id('LT_LB_loading')
+        self.wait_until(EC.invisibility_of_element(lb_loading))
+        lb_content = self.driver.find_element_by_id('LT_LB_content')
+        add_button = lb_content.find_element_by_id('addnewcollectionButton')
+        for i, cname in enumerate(to_add, 1):
+            logger.debug("Clicking 'Add new collection' button")
+            add_button.click()
+            self.wait_until(
+                lambda _: len(lb_content.find_elements_by_css_selector(
+                    'input[id^="name_-"]')) == i)
+            elt = lb_content.find_element_by_css_selector(
+                'input[id^="name_-"]')
+            logger.debug("Setting new collection name to %r", cname)
+            elt.clear()
+            elt.send_keys(cname)
+        save_button = lb_content.find_element_by_css_selector(
+            ':scope > div:nth-of-type(1) > .ltbtn')
+        logger.debug("Saving new collections")
+        save_button.click()
+        self.wait_until(EC.staleness_of(lb_content))
+        self.wait_until(page_loaded_condition)
+        for cname in to_add:
+            logger.info("Created collection %r", cname)
+
+    def set_collections(self, cnames):
+        """Set collections."""
+        cnames = set(cnames)
+        for _ in range(2):
+            parent = self.driver.find_element_by_class_name(
+                'collectionsCheckMenu')
+            cbs = self.parse_collections(parent)
+            if not cnames <= cbs.keys():
+                self.show_all_collections(parent)
+                cbs = self.parse_collections(parent)
+            if cnames <= cbs.keys():
+                break
+            to_add = cnames - cbs.keys()
+            self.add_collections(parent, to_add)
+        else:
+            raise RuntimeError(f"Missing collections: {to_add!r}")
+        assert cnames <= cbs.keys()
+        for cname, cb in cbs.items():
+            if cb.is_selected() != (cname in cnames):
+                logger.debug("%s collection %r",
+                             "Selecting" if cname in cnames else "Deselecting",
+                             cname)
+                cb.click()
 
     def set_rating(self, rating):
         """Set star rating."""
@@ -673,6 +759,7 @@ class LibraryThingRobot:
         html = self.driver.find_element_by_tag_name('html')
         self.driver.find_element_by_id('book_editTabTextSave2').click()
         self.wait_until(EC.staleness_of(html))
+        self.wait_until(page_loaded_condition)
 
     def add_book(self, book_id, book_data):
         """Add a new book using the manual entry form."""
@@ -698,7 +785,7 @@ class LibraryThingRobot:
         self.set_tags(book_data.get('tags'))
 
         # Collections
-        # TODO
+        self.set_collections(book_data['collections'])
 
         # Rating
         self.set_rating(book_data.get('rating', 0))
@@ -837,8 +924,7 @@ def main(config, data):
             logger.error("Import failed with exception", exc_info=True)
         finally:
             # TODO: Get rid of this at some point
-            print("Press enter to exit")
-            input()
+            input("Press enter to exit: ")
 
     return success
 

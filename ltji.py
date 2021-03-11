@@ -1069,7 +1069,8 @@ class LibraryThingRobot:
         """Add a new book."""
         logger.info("Adding book %s: %s", book_id, book_data['title'])
         source = book_data.get('source')
-        if source and source != 'manual entry':
+        if (source and source != 'manual entry'
+                and not config.no_add_from_source):
             self.add_from_source(book_id, book_data, source)
         else:
             self.add_manually(book_id, book_data)
@@ -1160,6 +1161,8 @@ if __name__ == '__main__':
     parser.add_argument('-i', '--book-ids',
                         help="Comma-separated list of book ids to import, or "
                         "@filename to read ids from file")
+    parser.add_argument('-s', '--no-add-from-source', action='store_true',
+                        help="Ignore source field, add books manually")
     parser.add_argument('-t', '--tag',
                         help="Tag to add to all imported books.")
     parser.add_argument('--no-venue-search', action='store_true',

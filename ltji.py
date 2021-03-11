@@ -799,6 +799,35 @@ class LibraryThingRobot:
         set_text(self.driver, 'form_bcid_1', id1)
         set_text(self.driver, 'form_bcid_2', id2)
 
+    def check_identifier(self, elt, expected, name):
+        """Check if the given text element contains the expected value."""
+        value = elt.get_attribute('value')
+        if expected:
+            if not value:
+                logger.warning("Book has no %s value, expected %r",
+                               name, expected)
+            elif value != expected:
+                logger.warning("Book has %s value %r, expected %r",
+                               name, value, expected)
+        else:
+            if value:
+                logger.warning("Book has %s value %r, expected no value")
+
+    def check_immutable_identifiers(self, ean, upc, asin, lccn, oclc):
+        """Check immutable identifier fields."""
+        driver = self.driver
+        self.check_identifier(driver.find_element_by_css_selector(
+            'input[name="form_ean"]'), ean, 'EAN')
+        # ASIN element has same name as UPC, probably a copy-paste error
+        upc_elt, asin_elt = driver.find_elements_by_css_selector(
+            'input[name="form_upc"]')
+        self.check_identifier(upc_elt, upc, 'UPC')
+        self.check_identifier(asin_elt, asin, 'ASIN')
+        self.check_identifier(driver.find_element_by_css_selector(
+            'input[name="form_lccn"]'), lccn, 'LCCN')
+        self.check_identifier(driver.find_element_by_css_selector(
+            'input[name="form_oclc"]'), oclc, 'OCLC')
+
     def save_changes(self):
         """Save book edits."""
         save_button = self.driver.find_element_by_id('book_editTabTextSave2')
@@ -890,11 +919,18 @@ class LibraryThingRobot:
         self.set_physical_summary(book_data.get('physical_description'))
         self.set_summary(book_data.get('summary'))
 
-        # Barcode
+        # Identifiers
         # TODO: Set book id as barcode if none specified
         # TODO: Check for existing book
         self.set_barcode(get_path(book_data, 'barcode', '1'))
         self.set_bcid(book_data.get('bcid'))
+        self.check_immutable_identifiers(
+            ean=get_path(book_data, 'ean', 0),
+            upc=get_path(book_data, 'upc', 0),
+            asin=book_data.get('asin'),
+            lccn=book_data.get('lccn'),
+            oclc=book_data.get('oclc'),
+        )
 
         # JSON does not correctly indicate whether a book is private
         # We allow the user to specify this by a config flag

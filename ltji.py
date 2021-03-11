@@ -1188,11 +1188,8 @@ if __name__ == '__main__':
     parser.add_argument('-b', '--browser', choices=DRIVERS,
                         default='firefox', help="Browser to use")
     group = parser.add_mutually_exclusive_group()
-    group.add_argument('-c', '--cookies-file', default='cookies.json',
+    group.add_argument('-c', '--cookies-file',
                        help="File to save/load login cookies")
-    group.add_argument('--no-cookies-file', dest='cookies_file',
-                       action='store_const', const='',
-                       help="Don't save or load cookies")
     parser.add_argument('-e', '--errors-file', help="Output file for list of "
                         "book ids with import errors")
     parser.add_argument('-i', '--book-ids',

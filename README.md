@@ -29,5 +29,5 @@ The script will open a new browser session to import the data. You will be
 prompted to log in manually, after which the script will begin adding books to
 your library.
 
-Subsequent executions of the script will use saved cookies to bypass the manual
-login step.
+If you set the `-c`/`--cookies` flag, the script will save cookies to file and
+use them to bypass the login step on subsequent runs.

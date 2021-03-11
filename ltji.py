@@ -622,6 +622,7 @@ class LibraryThingRobot:
     def set_original_language(self, book_data):
         oname = get_path(book_data, 'originallanguage', 0)
         if not oname:
+            self.set_language('original', 'bookedit_lang_original', None, None)
             return
         # The original language code field contains the primary, secondary,
         # and original language codes, deduplicated. This makes it difficult to

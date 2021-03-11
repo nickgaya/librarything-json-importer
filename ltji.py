@@ -606,7 +606,7 @@ class LibraryThingRobot:
         """Set a language field specified by id."""
         parent = self.driver.find_element_by_id(elt_id)
         select = Select(parent.find_element_by_tag_name('select'))
-        if not lang:
+        if not lang or not lang_code:
             select_by_value(select, '', "Clearing %s language", term)
             return
         if lang_code not in (opt.get_attribute('value')
@@ -618,6 +618,27 @@ class LibraryThingRobot:
                 lambda wd: parent.find_element_by_tag_name('select')))
         select_by_value(select, lang_code,
                         "Selecting %s language %r (%s)", term, lang, lang_code)
+
+    def set_original_language(self, book_data):
+        oname = get_path(book_data, 'originallanguage', 0)
+        if not oname:
+            return
+        # The original language code field contains the primary, secondary,
+        # and original language codes, deduplicated. This makes it difficult to
+        # figure out which code actually corresponds to the original language.
+        #
+        # First we check if the original language matches the primary or
+        # secondary language. If so we can use the same language code.
+        #
+        # Otherwise, we use the last value in the list.
+        for n, c in zip(book_data.get('language', ()),
+                        book_data.get('language_codeA', ())):
+            if oname == n:
+                ocode = c
+                break
+        else:
+            ocode = get_path(book_data, 'originallanguage_codeA', -1)
+        self.set_language('original', 'bookedit_lang_original', oname, ocode)
 
     def set_reading_dates(self, date_started, date_finished):
         """Set reading dates."""
@@ -840,9 +861,7 @@ class LibraryThingRobot:
         self.set_language('secondary', 'bookedit_lang2',
                           get_path(book_data, 'language', 1),
                           get_path(book_data, 'language_codeA', 1))
-        self.set_language('original', 'bookedit_lang_original',
-                          get_path(book_data, 'originallanguage', 0),
-                          get_path(book_data, 'originallanguage_codeA', -1))
+        self.set_original_language(book_data)
 
         # Reading dates
         self.set_reading_dates(book_data.get('datestarted'),

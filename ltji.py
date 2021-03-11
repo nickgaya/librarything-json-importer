@@ -3,6 +3,7 @@ import json
 import logging
 import math
 import os.path
+import re
 import time
 from contextlib import nullcontext
 from urllib.parse import urlparse
@@ -757,9 +758,30 @@ class LibraryThingRobot:
     def save_changes(self):
         """Save book edits."""
         html = self.driver.find_element_by_tag_name('html')
+        logger.debug("Clicking save button")
         self.driver.find_element_by_id('book_editTabTextSave2').click()
         self.wait_until(EC.staleness_of(html))
         self.wait_until(page_loaded_condition)
+
+    book_url_path_re = re.compile('/work/([0-9]+)/book/([0-9]+)')
+
+    def check_work_id(self, expected_work_id):
+        """Check the work id of a newly created book."""
+        assert (self.driver.current_url ==
+                'https://www.librarything.com/addbooks')
+        self.wait_until(EC.visibility_of_element_located((By.ID, 'bookframe')))
+        last_added_book = self.driver.find_element_by_css_selector(
+            '#bookframe .booklist .book')
+        anchor = last_added_book.find_element_by_css_selector(
+            ':scope > h2 > a')
+        path = urlparse(anchor.get_attribute('href')).path
+        match = self.book_url_path_re.match(path)
+        work_id = match.group(1)
+        book_id = match.group(2)
+        logger.info("Created book with id %s, work id %s", book_id, work_id)
+        if expected_work_id and work_id != expected_work_id:
+            logger.warning("Book id %s has work id %s, expected %s",
+                           book_id, work_id, expected_work_id)
 
     def add_book(self, book_id, book_data):
         """Add a new book using the manual entry form."""
@@ -865,6 +887,7 @@ class LibraryThingRobot:
             set_checkbox(self.driver, 'books_private', True)
 
         self.save_changes()
+        self.check_work_id(book_data.get('workcode'))
 
 
 # Map from browser name to WebDriver class

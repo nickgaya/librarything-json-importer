@@ -78,24 +78,27 @@ def page_loaded_condition(driver):
     return driver.execute_script("return document.readyState") == 'complete'
 
 
-def set_text(scope, elt_id, value):
-    """Set the value of a text element by id."""
-    elt = scope.find_element_by_id(elt_id)
+def set_text_elt(elt, value, desc, *args):
     if value:
         value = normalize_newlines(value)
         if elt.get_attribute('value') != value:
             if elt.tag_name == 'textarea':
-                logger.debug("Setting text field %r", elt_id)
+                logger.debug(f"Setting {desc}", *args)
             else:
-                logger.debug("Setting text field %r to value %r",
-                             elt_id, value)
+                logger.debug(f"Setting {desc} to value %r", *args, value)
             elt.clear()
             elt.send_keys(value)
     else:
         if elt.get_attribute('value'):
-            logger.debug("Clearing text field %r", elt_id)
+            logger.debug(f"Clearing {desc}", *args)
             elt.clear()
             elt.send_keys('')
+
+
+def set_text(scope, elt_id, value):
+    """Set the value of a text element by id."""
+    elt = scope.find_element_by_id(elt_id)
+    set_text_elt(elt, value, "text field %r", elt_id)
     return elt
 
 
@@ -135,11 +138,27 @@ class LibraryThingRobot:
         self.config = config
         self.driver = driver
 
-    def wait_until(self, condition):
+    def wait_until(self, condition, seconds=10):
         """Wait up to 10 seconds for the given wait condition."""
-        return WebDriverWait(self.driver, 10).until(condition)
+        return WebDriverWait(self.driver, seconds).until(condition)
+
+    def wait_for_lb(self):
+        """Wait for the lightbox to appear and load."""
+        lb = self.wait_until(
+            EC.visibility_of_element_located((By.ID, 'LT_LB')))
+        loading = lb.find_element_by_id('LT_LB_loading')
+        self.wait_until(EC.invisibility_of_element(loading))
+        return lb.find_element_by_id('LT_LB_content')
+
+    def click_link(self, elt, message, *args):
+        html = self.driver.find_element_by_tag_name('html')
+        logger.debug(message, *args)
+        elt.click()
+        self.wait_until(EC.staleness_of(html))
+        self.wait_until(page_loaded_condition)
 
     def user_alert(self, message):
+        """Display an alert to the user."""
         self.driver.execute_script("alert(arguments[0])", message)
         WebDriverWait(self.driver, 60).until_not(EC.alert_is_present())
 
@@ -261,9 +280,7 @@ class LibraryThingRobot:
             raise RuntimeError(f"Unexpected button count: {len(buttons)}")
         logger.debug("Clicking 'edit collections' button")
         buttons[1].click()
-        lb_loading = self.driver.find_element_by_id('LT_LB_loading')
-        self.wait_until(EC.invisibility_of_element(lb_loading))
-        lb_content = self.driver.find_element_by_id('LT_LB_content')
+        lb_content = self.wait_for_lb()
         add_button = lb_content.find_element_by_id('addnewcollectionButton')
         for i, cname in enumerate(to_add, 1):
             logger.debug("Clicking 'Add new collection' button")
@@ -289,8 +306,9 @@ class LibraryThingRobot:
         """Set collections."""
         cnames = set(cnames)
         for _ in range(2):
-            parent = self.driver.find_element_by_class_name(
-                'collectionsCheckMenu')
+            # Collections section has the same id as tags, perhaps due to a
+            # copy-paste error in the website source
+            _, parent = self.driver.find_elements_by_id('bookedit_tags')
             cbs = self.parse_collections(parent)
             if not cnames <= cbs.keys():
                 self.show_all_collections(parent)
@@ -479,7 +497,7 @@ class LibraryThingRobot:
 
     def guess_page_type(self, num):
         """Guess the page type from a given page number value."""
-        num_chars = set(num.lower())
+        num_chars = set(num.casefold())
         if num_chars <= self.digits:
             return '1,2,3,...', '0'
         if num_chars <= self.rn_digits:
@@ -523,17 +541,21 @@ class LibraryThingRobot:
 
     def set_dimension(self, scope, i, fs, hlt):
         """Set a dimension item."""
-        fsid = fs.get_attribute('id')
         height, length, thickness = hlt
         # Set or clear dimension text fields
-        for dim, pfx in ((height, 'pdh'), (length, 'pdl'), (thickness, 'pdt')):
+        for dim, name in ((height, 'height'),
+                          (length, 'length_dim'),
+                          (thickness, 'thickness')):
             num, _ = dim.split() if dim else ('', None)
-            set_text(fs, f'{pfx}_{fsid}', num)
+            # Element ids are different in add/edit book form
+            elt = fs.find_element_by_css_selector(f'input[name="{name}"]')
+            set_text_elt(elt, num, "dimension %d", i+1)
         dim = height or length or thickness
         if dim:
             # Set dimension units
             unit, uvalue = self.get_dim_unit(dim)
-            select = Select(fs.find_element_by_id(f'pdu_{fsid}'))
+            select = Select(fs.find_element_by_css_selector(
+                'select[name="d-unit"]'))
             select_by_value(select, uvalue,
                             "Setting unit of dimension %d to %r (%s)",
                             i+1, unit, uvalue)
@@ -630,6 +652,7 @@ class LibraryThingRobot:
         """Open the location editing popup."""
         logger.debug("Clicking location %r link", change_link.text)
         change_link.click()
+        self.wait_for_lb()
         return self.wait_until(
             EC.presence_of_element_located((By.ID, "pickrecommendations")))
 
@@ -757,38 +780,11 @@ class LibraryThingRobot:
 
     def save_changes(self):
         """Save book edits."""
-        html = self.driver.find_element_by_tag_name('html')
-        logger.debug("Clicking save button")
-        self.driver.find_element_by_id('book_editTabTextSave2').click()
-        self.wait_until(EC.staleness_of(html))
-        self.wait_until(page_loaded_condition)
+        save_button = self.driver.find_element_by_id('book_editTabTextSave2')
+        self.click_link(save_button, 'Clicking save button')
 
-    book_url_path_re = re.compile('/work/([0-9]+)/book/([0-9]+)')
-
-    def check_work_id(self, expected_work_id):
-        """Check the work id of a newly created book."""
-        assert (self.driver.current_url ==
-                'https://www.librarything.com/addbooks')
-        self.wait_until(EC.visibility_of_element_located((By.ID, 'bookframe')))
-        last_added_book = self.driver.find_element_by_css_selector(
-            '#bookframe .booklist .book')
-        anchor = last_added_book.find_element_by_css_selector(
-            ':scope > h2 > a')
-        path = urlparse(anchor.get_attribute('href')).path
-        match = self.book_url_path_re.match(path)
-        work_id = match.group(1)
-        book_id = match.group(2)
-        logger.info("Created book with id %s, work id %s", book_id, work_id)
-        if expected_work_id and work_id != expected_work_id:
-            logger.warning("Book id %s has work id %s, expected %s",
-                           book_id, work_id, expected_work_id)
-
-    def add_book(self, book_id, book_data):
-        """Add a new book using the manual entry form."""
-        logger.info("Adding book %s: %s", book_id, book_data['title'])
-
-        self.driver.get('https://www.librarything.com/addnew.php')
-
+    def set_book_fields(self, book_id, book_data):
+        """Populate the fields of the add/edit book form and save changes."""
         # Title
         set_text(self.driver, 'form_title', book_data['title'])
 
@@ -887,6 +883,177 @@ class LibraryThingRobot:
             set_checkbox(self.driver, 'books_private', True)
 
         self.save_changes()
+
+    def parse_source_list(self, scope):
+        """Parse the list of available sources in the add books form."""
+        rbs = {}
+        for rb in scope.find_elements_by_css_selector(
+                'input[type="radio"][name="libraryChoice"]'):
+            name = get_parent(rb).find_element_by_tag_name('label').text
+            rbs[name.casefold()] = rb, name
+        return rbs
+
+    def add_source_in_section(self, scope, section, lsource):
+        """Add a source in a given section of the add sources lightbox."""
+        for link in section.find_elements_by_css_selector('a[data-source-id]'):
+            ltext = link.text
+            if ltext.casefold() == lsource:
+                if link.get_attribute('data-library-added') != '1':
+                    logger.debug("Adding source %r", ltext)
+                    link.click()
+                    self.wait_until(
+                        lambda _: 'updating' not in get_class_list(scope))
+                return True
+        return False
+
+    def add_source(self, scope, lsource, have_overcat):
+        """Add a source."""
+        add_link = scope.find_element_by_css_selector(
+            ':scope > div > a:nth-of-type(2)')
+        logger.debug("Opening add source popup")
+        add_link.click()
+        lb_content = self.wait_for_lb()
+        found = False
+        featured_section = lb_content.find_element_by_id('section_featured')
+        found = self.add_source_in_section(scope, featured_section, lsource)
+        if not found:
+            allsources_section = lb_content.find_element_by_id(
+                'section_allsources')
+            logger.debug("Clicking 'All sources' link")
+            lb_content.find_element_by_id('menu_allsources').click()
+            self.wait_until(EC.visibility_of(allsources_section))
+            found = self.add_source_in_section(
+                scope, allsources_section, lsource)
+        if not found and not have_overcat:
+            # Source not found; make sure overcat is available
+            logger.debug("Clicking 'Featured' link")
+            lb_content.find_element_by_id('menu_featured').click()
+            self.wait_until(EC.visibility_of(featured_section))
+            self.add_source_in_section(scope, featured_section, 'overcat')
+        # Close lightbox
+        logger.debug("Closing add source popup")
+        self.driver.find_element_by_id('LT_LT_closebutton').click()
+        self.wait_until(EC.invisibility_of_element(lb_content))
+        return found
+
+    def select_source(self, source):
+        lsource = source.casefold()
+        parent = self.driver.find_element_by_id('yourlibrarylist')
+        rbs = self.parse_source_list(parent)
+        found = lsource in rbs
+        if not found:
+            found = self.add_source(parent, lsource, 'overcat' in rbs)
+            parent = self.driver.find_element_by_id('yourlibrarylist')
+            self.wait_until(
+                lambda _: 'updating' not in get_class_list(parent))
+            rbs = self.parse_source_list(parent)
+        if found:
+            rb, rb_name = rbs[lsource]
+        else:
+            logger.debug("Source %r not found, trying Overcat", source)
+            rb, rb_name = rbs['overcat']
+        if not rb.is_selected():
+            logger.debug("Selecting source %r", rb_name)
+            rb.click()
+        return found
+
+    def get_identifier(self, book_data):
+        """Get a search identifier for a book."""
+        value = book_data.get('asin')
+        if value:
+            return 'asin', value
+        value = get_path(book_data, 'ean', 0)
+        if value:
+            return 'ean', value
+        value = get_path(book_data, 'upc', 0)
+        if value:
+            return 'upc', value
+        value = book_data.get('lccn')
+        if value:
+            return 'lccn', value
+        value = book_data.get('oclc')
+        if value:
+            return 'oclc', value
+        value = book_data.get('originalisbn')
+        if value:
+            return 'isbn', value
+        title = book_data['title']
+        author = get_path(book_data, 'authors', 0, 'fl')
+        if author:
+            return 'title/author', f'{title}, {author}'
+        else:
+            return 'title', title
+
+    def add_from_source(self, book_id, book_data, source):
+        """Add a new book from the given source."""
+        self.driver.get('https://www.librarything.com/addbooks')
+        self.select_source(source)
+        identifier, value = self.get_identifier(book_data)
+        set_text(self.driver, 'form_find', value)
+        # Set tag here so book will be locatable in case of editing failure
+        if self.config.tag:
+            tags_elt = self.driver.find_element_by_css_selector(
+                'input[name="form_tags"]')
+            set_text_elt(tags_elt, self.config.tag, "tags to add")
+            defocus(tags_elt)
+        logger.debug("Clicking search button (searching by %s)", identifier)
+        self.driver.find_element_by_id('search_btn').click()
+        self.wait_until(EC.invisibility_of_element_located(
+            (By.ID, 'addbooks_ajax_status')), 30)
+        bookframe = self.driver.find_element_by_id('bookframe')
+        self.wait_until(
+            lambda _: bookframe.find_element_by_css_selector('.resultsfrom'))
+        # TODO: Scan results for match rather than just choosing first one?
+        # TODO: Fallback if not found
+        first_result = bookframe.find_element_by_css_selector(
+            'td.result > div.addbooks_title > a')
+        logger.debug("Clicking search result %r", first_result.text)
+        first_result.click()
+        self.wait_until(EC.invisibility_of_element_located(
+            (By.ID, 'addbooks_ajax_status')))
+        bookframe = self.driver.find_element_by_id('bookframe')
+        self.wait_until(
+            lambda _: ('opacity', '1') in get_inline_styles(bookframe))
+        last_added_book = self.driver.find_element_by_css_selector(
+            '#bookframe .booklist .book')
+        edit_link = last_added_book.find_element_by_css_selector(
+            '.icons > div:nth-of-type(1) > a')
+        self.click_link(edit_link, "Clicking edit link for last added book")
+        self.set_book_fields(book_id, book_data)
+
+    def add_manually(self, book_id, book_data):
+        """Add a new book using the manual entry form."""
+        self.driver.get('https://www.librarything.com/addnew.php')
+        self.set_book_fields(book_id, book_data)
+
+    book_url_path_re = re.compile('/work/([0-9]+)/book/([0-9]+)')
+
+    def check_work_id(self, expected_work_id):
+        """Check the work id of a newly created book."""
+        assert (self.driver.current_url ==
+                'https://www.librarything.com/addbooks')
+        self.wait_until(EC.visibility_of_element_located((By.ID, 'bookframe')))
+        last_added_book = self.driver.find_element_by_css_selector(
+            '#bookframe .booklist .book')
+        anchor = last_added_book.find_element_by_css_selector(
+            ':scope > h2 > a')
+        path = urlparse(anchor.get_attribute('href')).path
+        match = self.book_url_path_re.match(path)
+        work_id = match.group(1)
+        book_id = match.group(2)
+        logger.info("Created book with id %s, work id %s", book_id, work_id)
+        if expected_work_id and work_id != expected_work_id:
+            logger.warning("Book id %s has work id %s, expected %s",
+                           book_id, work_id, expected_work_id)
+
+    def add_book(self, book_id, book_data):
+        """Add a new book."""
+        logger.info("Adding book %s: %s", book_id, book_data['title'])
+        source = book_data.get('source')
+        if source and source != 'manual entry':
+            self.add_from_source(book_id, book_data, source)
+        else:
+            self.add_manually(book_id, book_data)
         self.check_work_id(book_data.get('workcode'))
 
 

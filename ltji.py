@@ -960,17 +960,67 @@ class LibraryThingRobot:
             rbs[name.casefold()] = rb, name
         return rbs
 
-    def add_source_in_section(self, scope, section, lsource):
-        """Add a source in a given section of the add sources lightbox."""
+    # Maps of lowercase source names to link text
+    featured_sources = {}
+    all_sources = {}
+
+    def parse_sources(self, section, sources):
+        logger.debug("Parsing sources in section %r",
+                     section.get_attribute('id'))
         for link in section.find_elements_by_css_selector('a[data-source-id]'):
             ltext = link.text
-            if ltext.casefold() == lsource:
-                if link.get_attribute('data-library-added') != '1':
-                    logger.debug("Adding source %r", ltext)
-                    link.click()
-                    self.wait_until(
-                        lambda _: 'updating' not in get_class_list(scope))
-                return True
+            sources[ltext.casefold()] = ltext
+
+    def add_source_in_section(self, scope, section, sources, lsource):
+        """Add a source in a given section of the add sources lightbox."""
+        if not sources:
+            self.parse_sources(section, sources)
+        ltext = sources.get(lsource)
+        if not ltext:
+            return False
+        link = section.find_element_by_link_text(ltext)
+        if link.get_attribute('data-library-added') != '1':
+            logger.debug("Adding source %r", ltext)
+            link.click()
+            self.wait_until(
+                lambda _: link.get_attribute('data-library-added-new') == '1')
+            self.wait_until(
+                lambda _: 'updating' not in get_class_list(scope))
+        return True
+
+    def add_source_lb(self, scope, lb_content, lsource, have_overcat):
+        # Short-circuit if the specified source is already known to be absent
+        if (self.featured_sources and self.all_sources
+                and lsource not in self.featured_sources
+                and lsource not in self.all_sources):
+            # Make sure Overcat is available
+            if not have_overcat:
+                featured_section = lb_content.find_element_by_id(
+                    'section_featured')
+                self.add_source_in_section(
+                    scope, featured_section, self.featured_sources, 'overcat')
+            return False
+        # Look in featured sources section
+        featured_section = lb_content.find_element_by_id('section_featured')
+        if self.add_source_in_section(
+                scope, featured_section, self.featured_sources, lsource):
+            return True
+        # Look in all sources section
+        allsources_section = lb_content.find_element_by_id(
+            'section_allsources')
+        logger.debug("Clicking 'All sources' link")
+        lb_content.find_element_by_id('menu_allsources').click()
+        self.wait_until(EC.visibility_of(allsources_section))
+        if self.add_source_in_section(
+                scope, allsources_section, self.all_sources, lsource):
+            return True
+        # Didn't find source; make sure Overcat is available
+        if not have_overcat:
+            logger.debug("Clicking 'Featured' link")
+            lb_content.find_element_by_id('menu_featured').click()
+            self.wait_until(EC.visibility_of(featured_section))
+            self.add_source_in_section(
+                scope, featured_section, self.featured_sources, 'overcat')
         return False
 
     def add_source(self, scope, lsource, have_overcat):
@@ -980,23 +1030,7 @@ class LibraryThingRobot:
         logger.debug("Opening add source popup")
         add_link.click()
         lb_content = self.wait_for_lb()
-        found = False
-        featured_section = lb_content.find_element_by_id('section_featured')
-        found = self.add_source_in_section(scope, featured_section, lsource)
-        if not found:
-            allsources_section = lb_content.find_element_by_id(
-                'section_allsources')
-            logger.debug("Clicking 'All sources' link")
-            lb_content.find_element_by_id('menu_allsources').click()
-            self.wait_until(EC.visibility_of(allsources_section))
-            found = self.add_source_in_section(
-                scope, allsources_section, lsource)
-        if not found and not have_overcat:
-            # Source not found; make sure overcat is available
-            logger.debug("Clicking 'Featured' link")
-            lb_content.find_element_by_id('menu_featured').click()
-            self.wait_until(EC.visibility_of(featured_section))
-            self.add_source_in_section(scope, featured_section, 'overcat')
+        found = self.add_source_lb(scope, lb_content, lsource, have_overcat)
         # Close lightbox
         logger.debug("Closing add source popup")
         self.driver.find_element_by_id('LT_LT_closebutton').click()

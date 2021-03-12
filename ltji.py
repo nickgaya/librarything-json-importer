@@ -1172,6 +1172,8 @@ def main(config, data):
                             ef.write('\n')
                             ef.flush()
                         errors += 1
+                        if config.debug_mode:
+                            input("\aPress enter to continue: ")
                     else:
                         imported += 1
             logger.info("%d books imported, %d errors", imported, errors)
@@ -1181,8 +1183,8 @@ def main(config, data):
         except Exception:
             logger.error("Import failed with exception", exc_info=True)
         finally:
-            # TODO: Get rid of this at some point
-            input("Press enter to exit: ")
+            if config.debug_mode:
+                input("\aPress enter to exit: ")
 
     return success
 
@@ -1193,7 +1195,7 @@ def parse_list(value):
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(prog='ltji')
+    parser = argparse.ArgumentParser()
     parser.add_argument('-v', '--verbose', action='store_true',
                         help="Log additional debugging information.")
     parser.add_argument('-b', '--browser', choices=DRIVERS,
@@ -1224,6 +1226,8 @@ if __name__ == '__main__':
                         "generate; 'json', use the value from the JSON data")
     parser.add_argument('-p', '--private', action='store_true',
                         help="Create private books")
+    parser.add_argument('-d', '--debug-mode', action='store_true',
+                        help="Pause for confirmation after errors and at exit")
     parser.add_argument('file', help="File containing JSON book data.")
     config = parser.parse_args()
     logging.basicConfig(level=logging.INFO)

@@ -1024,46 +1024,47 @@ class LibraryThingRobot:
             rb.click()
         return found
 
+    # Map from identifier names to book data paths
+    id_keys = {
+        'ean': ('ean', 0),
+        'upc': ('upc', 0),
+        'asin': 'asin',
+        'lccn': 'lccn',
+        'oclc': 'oclc',
+        'isbn': 'originalisbn',
+    }
+
     def get_identifier(self, book_data):
         """Get a search identifier for a book."""
-        value = book_data.get('asin')
-        if value:
-            return 'asin', value
-        value = get_path(book_data, 'ean', 0)
-        if value:
-            return 'ean', value
-        value = get_path(book_data, 'upc', 0)
-        if value:
-            return 'upc', value
-        value = book_data.get('lccn')
-        if value:
-            return 'lccn', value
-        value = book_data.get('oclc')
-        if value:
-            return 'oclc', value
-        value = book_data.get('originalisbn')
-        if value:
-            return 'isbn', value
-        title = book_data['title']
-        author = get_path(book_data, 'authors', 0, 'fl')
-        if author:
-            return 'title/author', f'{title}, {author}'
-        else:
-            return 'title', title
+        for identifier in self.config.search_by:
+            key_or_path = self.id_keys[identifier]
+            if isinstance(key_or_path, str):
+                value = book_data.get(key_or_path)
+            else:
+                value = get_path(book_data, *key_or_path)
+            if value:
+                return identifier, value
+        return None, None
 
     def add_from_source(self, book_id, book_data, source):
         """Add a new book from the given source."""
         self.driver.get('https://www.librarything.com/addbooks')
-        self.select_source(source)
         identifier, value = self.get_identifier(book_data)
-        set_text(self.driver, 'form_find', value)
+        if not value:
+            return False
+        self.select_source(source)
+        search_elt = self.driver.find_element_by_id('form_find')
+        logger.debug("Setting search field to value %r (%s)",
+                     value, identifier)
+        search_elt.clear()
+        search_elt.send_keys(value)
         # Set tag here so book will be locatable in case of editing failure
         if self.config.tag:
             tags_elt = self.driver.find_element_by_css_selector(
                 'input[name="form_tags"]')
             set_text_elt(tags_elt, self.config.tag, "tags to add")
             defocus(tags_elt)
-        logger.debug("Clicking search button (searching by %s)", identifier)
+        logger.debug("Clicking search button")
         self.driver.find_element_by_id('search_btn').click()
         self.wait_until(EC.invisibility_of_element_located(
             (By.ID, 'addbooks_ajax_status')), 30)
@@ -1087,6 +1088,7 @@ class LibraryThingRobot:
             '.icons > div:nth-of-type(1) > a')
         self.click_link(edit_link, "Clicking edit link for last added book")
         self.set_book_fields(book_id, book_data)
+        return True
 
     def add_manually(self, book_id, book_data):
         """Add a new book using the manual entry form."""
@@ -1117,9 +1119,10 @@ class LibraryThingRobot:
         """Add a new book."""
         logger.info("Adding book %s: %s", book_id, book_data['title'])
         source = book_data.get('source')
+        added = False
         if source and source != 'manual entry' and not config.no_source:
-            self.add_from_source(book_id, book_data, source)
-        else:
+            added = self.add_from_source(book_id, book_data, source)
+        if not added:
             self.add_manually(book_id, book_data)
         self.check_work_id(book_data.get('workcode'))
 
@@ -1190,7 +1193,7 @@ def main(config, data):
 
 def parse_list(value):
     """Parse a list of values separated by commas or whitespace."""
-    return [w for v in value.split(',') for w in v.split()]
+    return [w for v in value.split(',') for w in v.split()] if value else []
 
 
 if __name__ == '__main__':
@@ -1209,6 +1212,10 @@ if __name__ == '__main__':
                         "@filename to read ids from file")
     parser.add_argument('-s', '--no-source', action='store_true',
                         help="Ignore source field, add books manually")
+    parser.add_argument('--search-by', help="Comma-separated list of search "
+                        "identifiers to use when adding from source, in "
+                        "priority order. Valid values: "
+                        f"{', '.join(LibraryThingRobot.id_keys)}")
     parser.add_argument('-t', '--tag',
                         help="Tag to add to all imported books.")
     parser.add_argument('--no-venue-search', action='store_true',
@@ -1241,5 +1248,11 @@ if __name__ == '__main__':
         config.book_ids = parse_list(config.book_ids)
         if not config.book_ids:
             raise ValueError("Empty list of book ids")
+    search_by = []
+    for identifier in parse_list(config.search_by):
+        if identifier not in LibraryThingRobot.id_keys:
+            raise ValueError("Invalid search identifier: %r", identifier)
+        search_by.append(identifier.lower())
+    config.search_by = search_by or list(LibraryThingRobot.id_keys)
     success = main(config, data)
     exit(0 if success else 1)

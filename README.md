@@ -66,9 +66,8 @@ script with the `-i`/`--book-ids` flag.
 
 * The process for adding data from sources is somewhat rough and has a chance
   to select an incorrect work. To add all books manually use the
-  `-s`/`--no-add-from-source` flag. Note that manually added books will not
-  have EAN, UPC, ASIN, LCCN, or OCLC values, as these values cannot be entered
-  manually.
+  `-s`/`--no-source` flag. Note that manually added books will not have EAN,
+  UPC, ASIN, LCCN, or OCLC values, as these values cannot be entered manually.
 
 * The script has only been tested with Firefox, so there may be unknown issues
   with other browsers.

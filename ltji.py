@@ -162,6 +162,16 @@ class LibraryThingRobot:
         self.driver.execute_script("alert(arguments[0])", message)
         WebDriverWait(self.driver, 60).until_not(EC.alert_is_present())
 
+    def close_gdpr_banner(self):
+        """Dismiss GDPR banner if present."""
+        try:
+            banner = self.driver.find_element_by_id('gdpr_notice')
+        except NoSuchElementException:
+            return
+        logger.debug("Clicking GDPR banner 'I Agree' button")
+        banner.find_element_by_id('gdpr_closebutton').click()
+        self.wait_until(EC.invisibility_of_element(banner))
+
     def login(self):
         """Log in to LibraryThing."""
         driver = self.driver
@@ -180,6 +190,7 @@ class LibraryThingRobot:
             WebDriverWait(self.driver, 180).until(
                 lambda wd: urlparse(wd.current_url).path == '/home')
         logger.debug("Login successful")
+        self.close_gdpr_banner()
         if cookies_file:
             with open(cookies_file, 'w') as f:
                 json.dump(driver.get_cookies(), f)

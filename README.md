@@ -38,11 +38,11 @@ script with the `-i`/`--book-ids` flag.
 
 ## Known limitations
 
+LibraryThing's JSON export functionality omits some information needed to fully
+recreate a book (https://www.librarything.com/topic/330435):
+
 * The JSON data does not include cover id, inventory status, or Lexile measure,
   so the importer does not set these properties.
-
-* The JSON data does not indicate whether books are private. To import all
-  books as private, use the `-p`/`--private` flag.
 
 * The JSON data does not specify pagination type so the script will attempt to
   guess based on the page count value (numbers, roman numerals, or "other")
@@ -64,8 +64,26 @@ script with the `-i`/`--book-ids` flag.
   values. You can use the `--summary` and `--physical-summary` flags to change
   this behavior.
 
-* The process for adding data from sources is somewhat rough and has a chance
-  to select an incorrect work. To add all books manually use the
+Limitations of the add/edit forms:
+
+* The script will log a warning if a book's work id differs from the source
+  data, but there is no straightforward way to correct this.
+
+* LibraryThing does not allow editing some identifiers such as ASIN or LCCN.
+  The script will log warnings if there are differences between the source data
+  and the book created for these fields, but there is no way to correct them.
+
+* The manual entry form does not have a physical description field
+  (https://www.librarything.com/topic/330379), so the physical description will
+  be auto-generated for manually added books.
+
+* The "private" checkbox does not work when adding books manually
+  (https://www.librarything.com/topic/330575).
+
+Limitations of the script itself:
+
+* The process for adding data from sources is somewhat rough and has a
+  possibility to select an incorrect work. To add all books manually use the
   `-s`/`--no-source` flag. Note that manually added books will not have EAN,
   UPC, ASIN, LCCN, or OCLC values, as these values cannot be entered manually.
 

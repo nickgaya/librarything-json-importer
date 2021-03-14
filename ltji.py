@@ -840,6 +840,16 @@ class LibraryThingRobot:
         self.check_identifier(driver.find_element_by_css_selector(
             'input[name="form_oclc"]'), oclc, 'OCLC')
 
+    def set_privacy(self, public):
+        """Set the book's privacy status."""
+        if config.private:
+            private = True
+        elif config.public:
+            private = False
+        else:
+            private = (public == '0')
+        set_checkbox(self.driver, 'books_private', private)
+
     def save_changes(self):
         """Save book edits."""
         save_button = self.driver.find_element_by_id('book_editTabTextSave2')
@@ -944,10 +954,8 @@ class LibraryThingRobot:
             oclc=book_data.get('oclc'),
         )
 
-        # JSON does not correctly indicate whether a book is private
-        # We allow the user to specify this by a config flag
-        if self.config.private:
-            set_checkbox(self.driver, 'books_private', True)
+        # Private flag
+        self.set_privacy(book_data.get('public'))
 
         self.save_changes()
 
@@ -1264,8 +1272,11 @@ if __name__ == '__main__':
                         default='auto', help="How to set the 'Summary' field: "
                         "'auto', leave blank for LibraryThing to auto-"
                         "generate; 'json', use the value from the JSON data")
-    parser.add_argument('-p', '--private', action='store_true',
-                        help="Create private books")
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument('-p', '--private', action='store_true',
+                       help="Set all books to private")
+    group.add_argument('-P', '--public', action='store_true',
+                       help="Set all books to public")
     parser.add_argument('-d', '--debug-mode', action='store_true',
                         help="Pause for confirmation after errors and at exit")
     parser.add_argument('file', help="File containing JSON book data.")

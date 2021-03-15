@@ -3,6 +3,7 @@ import argparse
 import json
 import logging
 import os.path
+import re
 
 from _common import (
     LibraryThingRobot,
@@ -43,6 +44,18 @@ class LibraryThingScraper(LibraryThingRobot):
                 raise RuntimeError("Unable to parse secondary author")
         return sa
 
+    cover_onclick_re = re.compile(r"si_info\('([^']*)'\)")
+
+    def get_cover(self):
+        """Get cover id."""
+        # TODO: Distinguish between user-specified and best-guess covers?
+        div = self.driver.find_element_by_id('maincover')
+        anchor = div.find_element_by_tag_name('a')
+        match = self.cover_onclick_re.match(anchor.get_attribute('onclick'))
+        cover_id = match.group(1)
+        logger.debug("Found cover id %r", cover_id)
+        return cover_id
+
     def process_book(self, book_id, book_data):
         logger.info("Processing book %s: %s", book_id, book_data['title'])
         work_id = book_data.get('workcode', '')
@@ -54,6 +67,7 @@ class LibraryThingScraper(LibraryThingRobot):
 
         extra = {}
         extra['secondary_authors'] = self.get_secondary_authors()
+        extra['cover'] = self.get_cover()
         book_data = self.extra.setdefault(book_id, {})
         book_data['_extra'] = extra
 

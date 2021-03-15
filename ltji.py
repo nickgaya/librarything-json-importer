@@ -1074,6 +1074,14 @@ def parse_search_by(config):
     config.search_by = search_by or list(LibraryThingImporter.id_keys)
 
 
+def add_extra_data(data, extra_file):
+    with open(extra_file) as f:
+        extra = json.load(f)
+    for book_id, extra_data in extra.items():
+        if book_id in data:
+            data[book_id]['_extra'] = extra_data['_extra']
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     add_common_flags(parser)
@@ -1100,11 +1108,15 @@ if __name__ == '__main__':
     parser.add_argument('-p', '--private', action='store_true',
                         help="Create private books")
     parser.add_argument('file', help="File containing JSON book data.")
+    parser.add_argument('extrafile', nargs='?',
+                        help="Optional file containing extra book data")
     config = parser.parse_args()
     init_logging(config, 'ltji')
     parse_book_ids(config)
     parse_search_by(config)
     with open(config.file) as f:
         data = json.load(f)
+    if config.extrafile:
+        add_extra_data(data, config.extrafile)
     success = main(config, data)
     exit(0 if success else 1)

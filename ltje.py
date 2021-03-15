@@ -22,6 +22,27 @@ class LibraryThingScraper(LibraryThingRobot):
         super(LibraryThingScraper, self).__init__(config, driver)
         self.extra = extra
 
+    def get_secondary_authors(self):
+        """Get list of secondary author names in order."""
+        sa = []
+        for elt in self.driver.find_elements_by_css_selector(
+                '#bookedit_roles > div.bookeditPerson'):
+            spans = elt.find_elements_by_css_selector(':scope > span')
+            if len(spans) == 1:
+                name = spans[0].text
+                logger.debug("Found secondary author %r with blank role", name)
+                sa.append({'lf': name})
+            elif len(spans) == 2:
+                name = spans[1].text
+                # Trim ' -' after role name
+                role = spans[0].text[:-2]
+                logger.debug("Found secondary author %r with role %r",
+                             name, role)
+                sa.append({'lf': name, 'role': role})
+            else:
+                raise RuntimeError("Unable to parse secondary author")
+        return sa
+
     def process_book(self, book_id, book_data):
         logger.info("Processing book %s: %s", book_id, book_data['title'])
         work_id = book_data.get('workcode', '')
@@ -32,6 +53,7 @@ class LibraryThingScraper(LibraryThingRobot):
             return
 
         extra = {}
+        extra['secondary_authors'] = self.get_secondary_authors()
         book_data = self.extra.setdefault(book_id, {})
         book_data['_extra'] = extra
 

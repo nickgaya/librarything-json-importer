@@ -739,6 +739,8 @@ class LibraryThingImporter(LibraryThingRobot):
 
     def set_book_fields(self, book_id, book_data):
         """Populate the fields of the add/edit book form and save changes."""
+        extra_data = book_data.get('_extra', {})
+
         # Title
         set_text(self.driver, 'form_title', book_data['title'])
 
@@ -768,7 +770,9 @@ class LibraryThingImporter(LibraryThingRobot):
         self.set_review_language(book_data.get('reviewlang'))
 
         # Other authors
-        sauthors = authors[1:] if authors else []
+        # Use extra field 'secondary_authors' if available to preserve order
+        sauthors = (extra_data.get('secondary_authors')
+                    or authors[1:] if authors else [])
         self.set_other_authors(sauthors)
 
         # Format

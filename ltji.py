@@ -4,9 +4,11 @@ import json
 import logging
 import math
 import re
-from urllib.parse import urlparse
+import time
+from urllib.parse import parse_qs, urlparse
 
 from selenium.common.exceptions import NoSuchElementException
+from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import Select
@@ -201,7 +203,7 @@ class LibraryThingImporter(LibraryThingRobot):
         logger.debug("Saving new collections")
         save_button.click()
         self.wait_until(EC.staleness_of(lb_content))
-        self.wait_until(page_loaded_condition)
+        self.wait_until(page_loaded_condition, 30)
         for cname in to_add:
             logger.info("Created collection %r", cname)
 
@@ -1044,6 +1046,158 @@ class LibraryThingImporter(LibraryThingRobot):
         if expected_work_id and work_id != expected_work_id:
             logger.warning("Book id %s has work id %s, expected %s",
                            book_id, work_id, expected_work_id)
+        return work_id, book_id
+
+    blank_covers = set()
+
+    def parse_blank_covers(self):
+        """Parse cover ids for blank covers."""
+        div = self.driver.find_element_by_id('memberblank')
+        logger.debug("Clicking 'show all' link for blank covers")
+        div.find_element_by_css_selector('p.limitedlink a').click()
+        self.wait_until(lambda _: 'showall' in get_class_list(div))
+        for elt in div.find_elements_by_css_selector('a.blankcoverpick'):
+            qs = parse_qs(urlparse(elt.get_attribute('href')).query)
+            cid, = qs['id']
+            self.blank_covers.add(f'cc_{cid}')
+
+    def set_default_cover(self, book_id):
+        """Set cover to user default."""
+        path = f"/changecover_newcover.php?book_id={book_id}&type=1&id=1"
+        link = self.driver.find_element_by_css_selector(
+            f'#middleColumn a[href="{path}"]')
+        self.click_link(link, "Selecting default cover")
+
+    def set_blank_cover(self, cid):
+        """Set cover to blank cover by numeric id."""
+        div = self.driver.find_element_by_id('memberblank')
+        elt = div.find_element_by_css_selector(
+            f'a.blankcoverpick[href$="&id={cid}"]')
+        if not elt.is_displayed():
+            logger.debug("Clicking 'show all' link for blank covers")
+            div.find_element_by_css_selector('p.limitedlink a').click()
+            self.wait_until(lambda _: 'showall' in get_class_list(div))
+        self.click_link(elt, "Selecting blank cover #%s", cid)
+
+    def wait_until_location_stable(self, elt):
+        """Attempt to wait until an element's location is stable."""
+        prev_location = None
+        location = elt.location
+        deadline = time.monotonic() + 30
+        while location != prev_location:
+            if time.monotonic() > deadline:
+                raise TimeoutError("Element location failed to stabilize")
+            time.sleep(1)
+            location, prev_location = elt.location, location
+
+    ctypes = {
+        'cc': '1',
+        'isbn': '2',
+        'asin': '3',
+    }
+
+    def confirm_cover_selection(self, lb_content, cover_id, cpfx, cid):
+        """Confirm cover selection."""
+        confirm = lb_content.find_element_by_id('changecover_confirm')
+        # Make sure we clicked on the right cover
+        ctype = self.ctypes[cpfx]
+        c_id = confirm.find_element_by_css_selector('input[name="id"]') \
+            .get_attribute('value')
+        c_type = confirm.find_element_by_css_selector('input[name="type"]') \
+            .get_attribute('value')
+        if c_id != cid or c_type != ctype:
+            raise RuntimeError(
+                f"Failed to select correct cover id {cover_id!r}: "
+                f"expected type={ctype!r}, id={cid!r}; "
+                f"got type={c_type!r}, id={c_id!r}")
+        # Don't change ISBN of book
+        try:
+            isbn_checkbox = confirm.find_element_by_css_selector(
+                'input[name="changeisbn"]')
+        except NoSuchElementException:
+            isbn_checkbox = None
+        if isbn_checkbox and isbn_checkbox.is_selected():
+            logger.debug("Deselecting 'change isbn' checkbox")
+            isbn_checkbox.click()
+        # Confirm selection
+        submit = confirm.find_element_by_css_selector('input[type="submit"]')
+        self.click_link(submit, "Clicking cover selection 'confirm' button")
+
+    def set_cover_from_list(self, div_id, term, cover_id, cpfx, cid):
+        """Set cover by id from the specified section."""
+        div = self.driver.find_element_by_id(div_id)
+        cover_div_id = f'am_{cid}' if cpfx == 'isbn' else cover_id
+        try:
+            cover_div = self.driver.find_element_by_id(cover_div_id)
+        except NoSuchElementException:
+            cover_div = None
+        if not cover_div:
+            link = div.find_element_by_css_selector('p.limitedlink a')
+            logger.debug("Clicking 'show all' link for %s covers", term)
+            link.click()
+            self.wait_until(lambda _: 'updating' not in get_class_list(div))
+            try:
+                cover_div = self.driver.find_element_by_id(cover_div_id)
+            except NoSuchElementException:
+                return False  # Cover not found
+        logger.debug("Selecting %s cover with id %r", term, cover_id)
+        info = self.driver.find_element_by_id('infoicon')
+        choose = info.find_element_by_css_selector(
+            ':scope > div:nth-of-type(2)')
+        # In Firefox, the move-to-element action does not scroll the viewport
+        # and fails if the element is not visible
+        # https://github.com/mozilla/geckodriver/issues/776
+        self.driver.execute_script(
+            "arguments[0].scrollIntoView({block: 'center'});", cover_div)
+        # Try to wait for the element position to stabilize before attempting
+        # the mouseover-and-click action chain
+        self.wait_until_location_stable(cover_div)
+        # Scroll again since element position may have changed
+        self.driver.execute_script(
+            "arguments[0].scrollIntoView({block: 'center'});", cover_div)
+        # Now mouseover the cover element and click on the overlay button
+        ActionChains(self.driver).move_to_element(cover_div).click(choose) \
+            .perform()
+        lb_content = self.wait_for_lb()
+        self.confirm_cover_selection(lb_content, cover_id, cpfx, cid)
+        return True
+
+    def set_member_cover(self, cover_id, cpfx, cid):
+        """Set member-uploaded cover by id."""
+        return self.set_cover_from_list(
+            'coverlist_customcovers', 'member-uploaded', cover_id, cpfx, cid)
+
+    def set_amazon_cover(self, cover_id, cpfx, cid):
+        """Set Amazon cover by id."""
+        return self.set_cover_from_list(
+            'coverlist_amazon', 'Amazon', cover_id, cpfx, cid)
+
+    def set_cover(self, work_id, book_id, cover_id):
+        """Set book cover."""
+        self.driver.get(
+            f'https://www.librarything.com/work/{work_id}/covers/{book_id}')
+        coverlist_all = self.wait_until(EC.presence_of_element_located(
+            (By.ID, 'coverlist_all')))
+        self.wait_until(
+            lambda _: 'updating' not in get_class_list(coverlist_all))
+        found = False
+        cpfx, cid = cover_id.split('_', 1)
+        if cpfx == 'cc':
+            if cid == '1':
+                self.set_default_cover(book_id)
+                found = True
+            else:
+                if not self.blank_covers:
+                    self.parse_blank_covers()
+                if cid in self.blank_covers:
+                    self.set_blank_cover(cid)
+                    found = True
+                else:
+                    found = self.set_member_cover(cover_id, cpfx, cid)
+        else:
+            found = self.set_amazon_cover(cover_id, cpfx, cid)
+        if not found:
+            logger.warning("Unable to find cover with id %r", cover_id)
 
     def add_book(self, book_id, book_data):
         """Add a new book."""
@@ -1054,7 +1208,16 @@ class LibraryThingImporter(LibraryThingRobot):
             added = self.add_from_source(book_id, book_data, source)
         if not added:
             self.add_manually(book_id, book_data)
-        self.check_work_id(book_data.get('workcode'))
+        work_id, book_id = self.check_work_id(book_data.get('workcode'))
+        cover = get_path(book_data, '_extra', 'cover')
+        if cover and not self.config.no_covers:
+            try:
+                self.set_cover(work_id, book_id, cover)
+            except Exception:
+                logger.warning("Exception setting cover for book %r",
+                               book_id, exc_info=True)
+                if config.debug_mode:
+                    input("\aPress enter to continue: ")
 
 
 def main(config, data):
@@ -1111,6 +1274,8 @@ if __name__ == '__main__':
                         "generate; 'json', use the value from the JSON data")
     parser.add_argument('-p', '--private', action='store_true',
                         help="Create private books")
+    parser.add_argument('--no-covers', action='store_true',
+                        help="Don't set book covers")
     parser.add_argument('file', help="File containing JSON book data.")
     parser.add_argument('extrafile', nargs='?',
                         help="Optional file containing extra book data")

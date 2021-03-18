@@ -95,12 +95,23 @@ class LibraryThingRobot:
         self.wait_until(EC.invisibility_of_element(loading))
         return lb.find_element_by_id('LT_LB_content')
 
+    def wait_until_location_stable(self, elt, seconds=30):
+        """Attempt to wait until an element's location is stable."""
+        prev_location = None
+        location = elt.location
+        deadline = time.monotonic() + seconds
+        while location != prev_location:
+            if time.monotonic() > deadline:
+                raise TimeoutError("Element location failed to stabilize")
+            time.sleep(1)
+            location, prev_location = elt.location, location
+
     def click_link(self, elt, message, *args):
         html = self.driver.find_element_by_tag_name('html')
         logger.debug(message, *args)
         elt.click()
         self.wait_until(EC.staleness_of(html))
-        self.wait_until(page_loaded_condition)
+        self.wait_until(page_loaded_condition, 30)
 
     def user_alert(self, message):
         """Display an alert to the user."""
@@ -109,6 +120,7 @@ class LibraryThingRobot:
 
     def close_gdpr_banner(self):
         """Dismiss GDPR banner if present."""
+        self.wait_until(page_loaded_condition)
         try:
             banner = self.driver.find_element_by_id('gdpr_notice')
         except NoSuchElementException:
@@ -132,8 +144,8 @@ class LibraryThingRobot:
         if not urlparse(driver.current_url).path == '/home':
             self.user_alert("[LTJI] Log in and complete robot check")
             logger.debug("Waiting for user login")
-            WebDriverWait(self.driver, 180).until(
-                lambda wd: urlparse(wd.current_url).path == '/home')
+            self.wait_until(
+                lambda wd: urlparse(wd.current_url).path == '/home', 180)
         logger.debug("Login successful")
         self.close_gdpr_banner()
         if cookies_file:

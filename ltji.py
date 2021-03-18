@@ -1053,16 +1053,86 @@ class LibraryThingImporter(LibraryThingRobot):
                            book_id, work_id, expected_work_id)
         return work_id, book_id
 
+    ctypes = {
+        'cc': '1',
+        'isbn': '2',
+        'asin': '3',
+    }
+
+    def confirm_cover_selection(self, scope, cover_id, cpfx, cid, *, info):
+        """Confirm cover selection."""
+        confirm = scope.find_element_by_id('changecover_confirm')
+        # Make sure we clicked on the right cover
+        ctype = self.ctypes[cpfx]
+        c_id = confirm.find_element_by_css_selector('input[name="id"]') \
+            .get_attribute('value')
+        c_type = confirm.find_element_by_css_selector('input[name="type"]') \
+            .get_attribute('value')
+        if c_id != cid or c_type != ctype:
+            raise RuntimeError(
+                f"Failed to select correct cover id {cover_id!r}: "
+                f"got type={c_type!r}, id={c_id!r}")
+        # Don't change ISBN of book
+        isbn_checkbox = try_find(confirm.find_element_by_css_selector,
+                                 'input[name="changeisbn"]')
+        if isbn_checkbox and isbn_checkbox.is_selected():
+            logger.debug("Deselecting 'change isbn' checkbox")
+            isbn_checkbox.click()
+        # Confirm selection
+        submit = confirm.find_element_by_css_selector('input[type="submit"]')
+        if info:
+            # Variant 1: Cover info dialog
+            logger.debug("Clicking cover info 'confirm' button")
+            submit.click()
+            alert = self.wait_until(EC.alert_is_present())
+            alert.accept()
+        else:
+            # Variant 2: "Choose this cover" dialog
+            self.click_link(submit,
+                            "Clicking cover selection 'confirm' button")
+
+    cover_onclick_re = re.compile(r"si_info\('([^']*)'\)")
+
+    def check_and_confirm_cover(self, cover_id, cpfx, cid):
+        """Check book cover id and confirm if it matches the target."""
+        div = self.driver.find_element_by_id('maincover')
+        anchor = div.find_element_by_tag_name('a')
+        match = self.cover_onclick_re.match(anchor.get_attribute('onclick'))
+        current_cover_id = match.group(1)
+        if current_cover_id != cover_id:
+            return False
+        # Cover id matches, confirm
+        icon = anchor.find_element_by_css_selector('img.icon')
+        logger.debug("Clicking cover info button")
+        self.driver.execute_script(
+            "arguments[0].scrollIntoView({block: 'center'});", div)
+        ActionChains(self.driver).move_to_element(div) \
+            .move_to_element(icon).click(icon).perform()
+        lb_content = self.wait_for_lb()
+        confirm_div = lb_content.find_element_by_css_selector(
+            '.coverinfo > div.alwaysblue:nth-child(1)')
+        if try_find(confirm_div.find_element_by_css_selector,
+                    'img.icon[src$="tick.png"]'):
+            self.close_lb(lb_content, "Cover already confirmed, "
+                          "closing cover info lightbox")
+            return True
+        self.confirm_cover_selection(confirm_div, cover_id, cpfx, cid,
+                                     info=True)
+        self.wait_until(EC.invisibility_of_element(lb_content))
+        return True
+
     blank_covers = set()
 
     def parse_blank_covers(self):
         """Parse cover ids for blank covers."""
+        logger.debug("Parsing blank cover ids")
         div = self.driver.find_element_by_id('memberblank')
         logger.debug("Clicking 'show all' link for blank covers")
         div.find_element_by_css_selector('p.limitedlink a').click()
         self.wait_until(lambda _: 'showall' in get_class_list(div))
         for elt in div.find_elements_by_css_selector('a.blankcoverpick'):
             qs = parse_qs(urlparse(elt.get_attribute('href')).query)
+            assert qs['type'] == ['1']
             cid, = qs['id']
             self.blank_covers.add(f'cc_{cid}')
 
@@ -1077,12 +1147,12 @@ class LibraryThingImporter(LibraryThingRobot):
         """Set cover to blank cover by numeric id."""
         div = self.driver.find_element_by_id('memberblank')
         elt = div.find_element_by_css_selector(
-            f'a.blankcoverpick[href$="&id={cid}"]')
+            f'a.blankcoverpick[href$="&type=1&id={cid}"]')
         if not elt.is_displayed():
             logger.debug("Clicking 'show all' link for blank covers")
             div.find_element_by_css_selector('p.limitedlink a').click()
             self.wait_until(lambda _: 'showall' in get_class_list(div))
-        self.click_link(elt, "Selecting blank cover #%s", cid)
+        self.click_link(elt, "Selecting blank cover with id %r", cid)
 
     def wait_until_location_stable(self, elt):
         """Attempt to wait until an element's location is stable."""
@@ -1093,37 +1163,9 @@ class LibraryThingImporter(LibraryThingRobot):
             if time.monotonic() > deadline:
                 raise TimeoutError("Element location failed to stabilize")
             time.sleep(1)
+            self.driver.execute_script(
+                "arguments[0].scrollIntoView({block: 'center'});", elt)
             location, prev_location = elt.location, location
-
-    ctypes = {
-        'cc': '1',
-        'isbn': '2',
-        'asin': '3',
-    }
-
-    def confirm_cover_selection(self, lb_content, cover_id, cpfx, cid):
-        """Confirm cover selection."""
-        confirm = lb_content.find_element_by_id('changecover_confirm')
-        # Make sure we clicked on the right cover
-        ctype = self.ctypes[cpfx]
-        c_id = confirm.find_element_by_css_selector('input[name="id"]') \
-            .get_attribute('value')
-        c_type = confirm.find_element_by_css_selector('input[name="type"]') \
-            .get_attribute('value')
-        if c_id != cid or c_type != ctype:
-            raise RuntimeError(
-                f"Failed to select correct cover id {cover_id!r}: "
-                f"expected type={ctype!r}, id={cid!r}; "
-                f"got type={c_type!r}, id={c_id!r}")
-        # Don't change ISBN of book
-        isbn_checkbox = try_find(confirm.find_element_by_css_selector,
-                                 'input[name="changeisbn"]')
-        if isbn_checkbox and isbn_checkbox.is_selected():
-            logger.debug("Deselecting 'change isbn' checkbox")
-            isbn_checkbox.click()
-        # Confirm selection
-        submit = confirm.find_element_by_css_selector('input[type="submit"]')
-        self.click_link(submit, "Clicking cover selection 'confirm' button")
 
     def set_cover_from_list(self, div_id, term, cover_id, cpfx, cid):
         """Set cover by id from the specified section."""
@@ -1131,11 +1173,15 @@ class LibraryThingImporter(LibraryThingRobot):
         cover_div_id = f'am_{cid}' if cpfx == 'isbn' else cover_id
         cover_div = try_find(self.driver.find_element_by_id, cover_div_id)
         if not cover_div:
-            link = div.find_element_by_css_selector('p.limitedlink a')
-            logger.debug("Clicking 'show all' link for %s covers", term)
-            link.click()
-            self.wait_until(lambda _: 'updating' not in get_class_list(div))
-            cover_div = try_find(self.driver.find_element_by_id, cover_div_id)
+            show_all = try_find(div.find_element_by_css_selector,
+                                'p.limitedlink a')
+            if show_all:
+                logger.debug("Clicking 'show all' link for %s covers", term)
+                show_all.click()
+                self.wait_until(
+                    lambda _: 'updating' not in get_class_list(div))
+                cover_div = try_find(self.driver.find_element_by_id,
+                                     cover_div_id)
             if not cover_div:
                 return False  # Cover not found
         logger.debug("Selecting %s cover with id %r", term, cover_id)
@@ -1150,14 +1196,12 @@ class LibraryThingImporter(LibraryThingRobot):
         # Try to wait for the element position to stabilize before attempting
         # the mouseover-and-click action chain
         self.wait_until_location_stable(cover_div)
-        # Scroll again since element position may have changed
-        self.driver.execute_script(
-            "arguments[0].scrollIntoView({block: 'center'});", cover_div)
         # Now mouseover the cover element and click on the overlay button
         ActionChains(self.driver).move_to_element(cover_div) \
             .move_to_element(choose).click(choose).perform()
         lb_content = self.wait_for_lb()
-        self.confirm_cover_selection(lb_content, cover_id, cpfx, cid)
+        self.confirm_cover_selection(lb_content, cover_id, cpfx, cid,
+                                     info=False)
         return True
 
     def set_member_cover(self, cover_id, cpfx, cid):
@@ -1179,12 +1223,15 @@ class LibraryThingImporter(LibraryThingRobot):
             return
         self.driver.get(
             f'https://www.librarything.com/work/{work_id}/covers/{book_id}')
+        cpfx, cid = cover_id.split('_', 1)
+        # As a short-cut, check if the current cover already matches
+        if self.check_and_confirm_cover(cover_id, cpfx, cid):
+            return
         coverlist_all = self.wait_until(EC.presence_of_element_located(
             (By.ID, 'coverlist_all')))
         self.wait_until(
             lambda _: 'updating' not in get_class_list(coverlist_all))
         found = False
-        cpfx, cid = cover_id.split('_', 1)
         if cpfx == 'cc':
             if cid == '1':
                 self.set_default_cover(book_id)
@@ -1192,7 +1239,7 @@ class LibraryThingImporter(LibraryThingRobot):
             else:
                 if not self.blank_covers:
                     self.parse_blank_covers()
-                if cid in self.blank_covers:
+                if cover_id in self.blank_covers:
                     self.set_blank_cover(cid)
                     found = True
                 else:

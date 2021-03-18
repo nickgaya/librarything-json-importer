@@ -117,7 +117,7 @@ def main(config, data, extra):
             ltrobot.close_gdpr_banner()
         return ltrobot
 
-    return main_loop(config, data, 'import', init_fn,
+    return main_loop(config, data, 'process', init_fn,
                      LibraryThingScraper.process_book)
 
 

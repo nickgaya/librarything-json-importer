@@ -111,17 +111,6 @@ class LibraryThingRobot:
         lb_close.click()
         self.wait_until(EC.invisibility_of_element(lb_content))
 
-    def wait_until_location_stable(self, elt, seconds=30):
-        """Attempt to wait until an element's location is stable."""
-        prev_location = None
-        location = elt.location
-        deadline = time.monotonic() + seconds
-        while location != prev_location:
-            if time.monotonic() > deadline:
-                raise TimeoutError("Element location failed to stabilize")
-            time.sleep(1)
-            location, prev_location = elt.location, location
-
     def click_link(self, elt, message, *args):
         """Click an element and wait for a new page to load."""
         html = self.driver.find_element_by_tag_name('html')

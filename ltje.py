@@ -5,12 +5,15 @@ import logging
 import os.path
 import re
 
+from selenium.webdriver.common.action_chains import ActionChains
+
 from _common import (
     LibraryThingRobot,
     add_common_flags,
     init_logging,
     main_loop,
     parse_book_ids,
+    try_find,
 )
 
 logger = logging.getLogger('ltje')
@@ -44,17 +47,45 @@ class LibraryThingScraper(LibraryThingRobot):
                 raise RuntimeError("Unable to parse secondary author")
         return sa
 
+    def check_cover_confirmed(self, div, anchor):
+        # For some reason clicking on the anchor doesn't work; we have to click
+        # on the image element
+        icon = anchor.find_element_by_css_selector('img.icon')
+        logger.debug("Clicking cover info button")
+        self.driver.execute_script(
+            "arguments[0].scrollIntoView({block: 'center'});", div)
+        ActionChains(self.driver).move_to_element(div) \
+            .move_to_element(icon).click(icon).perform()
+        lb_content = self.wait_for_lb()
+        confirmed = None
+        confirm_div = try_find(lb_content.find_element_by_css_selector,
+                               '.coverinfo > div.alwaysblue:nth-child(1)')
+        if confirm_div:
+            if try_find(confirm_div.find_element_by_id, 'changecover_confirm'):
+                logger.debug("Found cover is not confirmed")
+                confirmed = False
+            elif try_find(confirm_div.find_element_by_css_selector,
+                          'img.icon[src$="tick.png"]'):
+                logger.debug("Found cover is confirmed")
+                confirmed = True
+        if confirmed is None:
+            logger.warning("Unable to determine cover confirmation status")
+        self.close_lb(lb_content, "Closing cover info lightbox")
+        return confirmed
+
     cover_onclick_re = re.compile(r"si_info\('([^']*)'\)")
 
     def get_cover(self):
         """Get cover id."""
-        # TODO: Distinguish between user-specified and best-guess covers?
         div = self.driver.find_element_by_id('maincover')
         anchor = div.find_element_by_tag_name('a')
         match = self.cover_onclick_re.match(anchor.get_attribute('onclick'))
         cover_id = match.group(1)
         logger.debug("Found cover id %r", cover_id)
-        return cover_id
+        cover_data = {'id': cover_id}
+        if self.config.login:
+            cover_data['confirmed'] = self.check_cover_confirmed(div, anchor)
+        return cover_data
 
     def process_book(self, book_id, book_data):
         """Extract extra information about a book."""

@@ -27,6 +27,7 @@ from _common import (
     page_loaded_condition,
     parse_book_ids,
     parse_list,
+    try_find,
 )
 
 parse_book_ids
@@ -935,9 +936,7 @@ class LibraryThingImporter(LibraryThingRobot):
         lb_content = self.wait_for_lb()
         found = self.add_source_lb(scope, lb_content, lsource, have_overcat)
         # Close lightbox
-        logger.debug("Closing add source popup")
-        self.driver.find_element_by_id('LT_LT_closebutton').click()
-        self.wait_until(EC.invisibility_of_element(lb_content))
+        self.close_lb(lb_content, "Closing add source popup")
         return found
 
     def select_source(self, source):
@@ -1117,11 +1116,8 @@ class LibraryThingImporter(LibraryThingRobot):
                 f"expected type={ctype!r}, id={cid!r}; "
                 f"got type={c_type!r}, id={c_id!r}")
         # Don't change ISBN of book
-        try:
-            isbn_checkbox = confirm.find_element_by_css_selector(
-                'input[name="changeisbn"]')
-        except NoSuchElementException:
-            isbn_checkbox = None
+        isbn_checkbox = try_find(confirm.find_element_by_css_selector,
+                                 'input[name="changeisbn"]')
         if isbn_checkbox and isbn_checkbox.is_selected():
             logger.debug("Deselecting 'change isbn' checkbox")
             isbn_checkbox.click()
@@ -1133,18 +1129,14 @@ class LibraryThingImporter(LibraryThingRobot):
         """Set cover by id from the specified section."""
         div = self.driver.find_element_by_id(div_id)
         cover_div_id = f'am_{cid}' if cpfx == 'isbn' else cover_id
-        try:
-            cover_div = self.driver.find_element_by_id(cover_div_id)
-        except NoSuchElementException:
-            cover_div = None
+        cover_div = try_find(self.driver.find_element_by_id, cover_div_id)
         if not cover_div:
             link = div.find_element_by_css_selector('p.limitedlink a')
             logger.debug("Clicking 'show all' link for %s covers", term)
             link.click()
             self.wait_until(lambda _: 'updating' not in get_class_list(div))
-            try:
-                cover_div = self.driver.find_element_by_id(cover_div_id)
-            except NoSuchElementException:
+            cover_div = try_find(self.driver.find_element_by_id, cover_div_id)
+            if not cover_div:
                 return False  # Cover not found
         logger.debug("Selecting %s cover with id %r", term, cover_id)
         info = self.driver.find_element_by_id('infoicon')
@@ -1162,8 +1154,8 @@ class LibraryThingImporter(LibraryThingRobot):
         self.driver.execute_script(
             "arguments[0].scrollIntoView({block: 'center'});", cover_div)
         # Now mouseover the cover element and click on the overlay button
-        ActionChains(self.driver).move_to_element(cover_div).click(choose) \
-            .perform()
+        ActionChains(self.driver).move_to_element(cover_div) \
+            .move_to_element(choose).click(choose).perform()
         lb_content = self.wait_for_lb()
         self.confirm_cover_selection(lb_content, cover_id, cpfx, cid)
         return True
@@ -1178,8 +1170,13 @@ class LibraryThingImporter(LibraryThingRobot):
         return self.set_cover_from_list(
             'coverlist_amazon', 'Amazon', cover_id, cpfx, cid)
 
-    def set_cover(self, work_id, book_id, cover_id):
+    def set_cover(self, work_id, book_id, cover_data):
         """Set book cover."""
+        cover_id = cover_data['id']
+        confirmed = cover_data.get('confirmed')
+        if confirmed is False:
+            # Don't set cover if source cover was chosen automatically
+            return
         self.driver.get(
             f'https://www.librarything.com/work/{work_id}/covers/{book_id}')
         coverlist_all = self.wait_until(EC.presence_of_element_located(
@@ -1214,14 +1211,15 @@ class LibraryThingImporter(LibraryThingRobot):
             added = self.add_from_source(book_id, book_data, source)
         if not added:
             self.add_manually(book_id, book_data)
-        work_id, book_id = self.check_work_id(book_data.get('workcode'))
-        cover = get_path(book_data, '_extra', 'cover')
-        if cover and not self.config.no_covers:
+        new_work_id, new_book_id = self.check_work_id(
+            book_data.get('workcode'))
+        cover_data = get_path(book_data, '_extra', 'cover')
+        if cover_data and not self.config.no_covers:
             try:
-                self.set_cover(work_id, book_id, cover)
+                self.set_cover(new_work_id, new_book_id, cover_data)
             except Exception:
                 logger.warning("Exception setting cover for book %r",
-                               book_id, exc_info=True)
+                               new_book_id, exc_info=True)
                 if config.debug_mode:
                     input("\aPress enter to continue: ")
 

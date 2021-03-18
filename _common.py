@@ -76,6 +76,14 @@ def page_loaded_condition(driver):
     return driver.execute_script("return document.readyState") == 'complete'
 
 
+def try_find(find_fn, *args, **kwargs):
+    """Try to find an element, or return None."""
+    try:
+        return find_fn(*args, **kwargs)
+    except NoSuchElementException:
+        return None
+
+
 class LibraryThingRobot:
     """Base class for automation of LibraryThing flows."""
 
@@ -94,6 +102,14 @@ class LibraryThingRobot:
         loading = lb.find_element_by_id('LT_LB_loading')
         self.wait_until(EC.invisibility_of_element(loading))
         return lb.find_element_by_id('LT_LB_content')
+
+    def close_lb(self, lb_content, message, *args):
+        """Click the lightbox close button."""
+        lb_close = self.driver.find_element_by_css_selector(
+            '#LT_LT_closebutton > a')
+        logger.debug(message, *args)
+        lb_close.click()
+        self.wait_until(EC.invisibility_of_element(lb_content))
 
     def wait_until_location_stable(self, elt, seconds=30):
         """Attempt to wait until an element's location is stable."""

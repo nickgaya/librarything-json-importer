@@ -14,7 +14,6 @@ from selenium.webdriver.remote.webdriver import WebDriver
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
-
 logger = None
 
 
@@ -79,6 +78,7 @@ def page_loaded_condition(driver):
 
 class LibraryThingRobot:
     """Base class for automation of LibraryThing flows."""
+
     def __init__(self, config, driver):
         self.config = config
         self.driver = driver
@@ -107,6 +107,7 @@ class LibraryThingRobot:
             location, prev_location = elt.location, location
 
     def click_link(self, elt, message, *args):
+        """Click an element and wait for a new page to load."""
         html = self.driver.find_element_by_tag_name('html')
         logger.debug(message, *args)
         elt.click()
@@ -238,6 +239,7 @@ def add_common_flags(parser):
 
 
 def init_logging(config, name):
+    """Configure logging."""
     global logger
     logging.basicConfig(level=logging.INFO)
     logger = logging.getLogger(name)
@@ -251,6 +253,7 @@ def parse_list(value):
 
 
 def parse_book_ids(config):
+    """Parse list of book ids or read from file."""
     if config.book_ids is not None:
         if config.book_ids.startswith('@'):
             with open(config.book_ids[1:]) as f:

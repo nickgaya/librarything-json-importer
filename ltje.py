@@ -57,6 +57,7 @@ class LibraryThingScraper(LibraryThingRobot):
         return cover_id
 
     def process_book(self, book_id, book_data):
+        """Extract extra information about a book."""
         logger.info("Processing book %s: %s", book_id, book_data['title'])
         work_id = book_data.get('workcode', '')
         url = f'https://www.librarything.com/work/{work_id}/details/{book_id}'
@@ -68,8 +69,9 @@ class LibraryThingScraper(LibraryThingRobot):
         extra = {}
         extra['secondary_authors'] = self.get_secondary_authors()
         extra['cover'] = self.get_cover()
-        book_data = self.extra.setdefault(book_id, {})
-        book_data['_extra'] = extra
+
+        extra_data = self.extra.setdefault(book_id, {})
+        extra_data['_extra'] = extra
 
 
 def main(config, data, extra):

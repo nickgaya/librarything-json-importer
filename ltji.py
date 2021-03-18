@@ -35,6 +35,7 @@ logger = logging.getLogger('ltji')
 
 
 def set_text_elt(elt, value, desc, *args):
+    """Set the contents of a text input field."""
     if value:
         value = normalize_newlines(value)
         if elt.get_attribute('value') != value:
@@ -164,6 +165,7 @@ class LibraryThingImporter(LibraryThingRobot):
         return cbs
 
     def show_all_collections(self, scope):
+        """Click button to show all collections."""
         buttons = scope.find_elements_by_css_selector(
             '.collectionListFooter .ltbtn')
         if len(buttons) != 2:
@@ -525,6 +527,7 @@ class LibraryThingImporter(LibraryThingRobot):
                         "Selecting %s language %r (%s)", term, lang, lang_code)
 
     def set_original_language(self, book_data):
+        """Set the original language field."""
         oname = get_path(book_data, 'originallanguage', 0)
         if not oname:
             self.set_language('original', 'bookedit_lang_original', None, None)
@@ -863,6 +866,7 @@ class LibraryThingImporter(LibraryThingRobot):
     all_sources = {}
 
     def parse_sources(self, section, sources):
+        """Parse list of sources."""
         logger.debug("Parsing sources in section %r",
                      section.get_attribute('id'))
         for link in section.find_elements_by_css_selector('a[data-source-id]'):
@@ -887,6 +891,7 @@ class LibraryThingImporter(LibraryThingRobot):
         return True
 
     def add_source_lb(self, scope, lb_content, lsource, have_overcat):
+        """Add a source using the lightbox."""
         # Short-circuit if the specified source is already known to be absent
         if (self.featured_sources and self.all_sources
                 and lsource not in self.featured_sources
@@ -936,6 +941,7 @@ class LibraryThingImporter(LibraryThingRobot):
         return found
 
     def select_source(self, source):
+        """Select a book data source."""
         lsource = source.casefold()
         parent = self.driver.find_element_by_id('yourlibrarylist')
         rbs = self.parse_source_list(parent)
@@ -1233,6 +1239,7 @@ def main(config, data):
 
 
 def parse_search_by(config):
+    """Parse list of search identifiers."""
     search_by = []
     for identifier in parse_list(config.search_by):
         if identifier not in LibraryThingImporter.id_keys:
@@ -1242,6 +1249,7 @@ def parse_search_by(config):
 
 
 def add_extra_data(data, extra_file):
+    """Merge extra data into book data."""
     with open(extra_file) as f:
         extra = json.load(f)
     for book_id, extra_data in extra.items():

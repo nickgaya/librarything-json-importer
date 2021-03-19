@@ -279,7 +279,7 @@ class LibraryThingImporter(LibraryThingRobot):
         select = Select(self.wait_until(
             lambda _: parent_elt.find_element_by_css_selector('select')))
         if not self.langs:
-            logger.debug("Populating language code map")
+            logger.debug("Populating review language code map")
             for opt in select.options[3:]:
                 self.langs[opt.text] = opt.get_attribute('value')
         if lang in self.langs:
@@ -514,16 +514,28 @@ class LibraryThingImporter(LibraryThingRobot):
         """Set a language field specified by id."""
         parent = self.driver.find_element_by_id(elt_id)
         select = Select(parent.find_element_by_tag_name('select'))
-        if not lang or not lang_code:
+        if not lang:
             select_by_value(select, '', "Clearing %s language", term)
             return
-        if lang_code not in (opt.get_attribute('value')
-                             for opt in select.options):
-            # Didn't find the language code, try switching to all langauges
+        assert lang_code
+        # Determine whether the menu is currently showing all languages
+        # or just the short list
+        if parent.find_element_by_id('longList').get_attribute('value') == '1':
+            show_all = None  # Won't be used
+            short = False
+        else:
+            show_all = parent.find_element_by_css_selector(
+                '.bookEditHint > a')
+            # No good way to tell the current state other than looking at the
+            # link href attribute
+            short = (show_all.get_attribute('href') ==
+                     'javascript:book_updateLangMenus(1)')
+        if short and lang_code not in (opt.get_attribute('value')
+                                       for opt in select.options):
             logger.debug("Clicking 'show all languages' link")
-            parent.find_element_by_css_selector('.bookEditHint > a').click()
+            show_all.click()
             select = Select(self.wait_until(
-                lambda wd: parent.find_element_by_tag_name('select')))
+                lambda _: parent.find_element_by_tag_name('select')))
         select_by_value(select, lang_code,
                         "Selecting %s language %r (%s)", term, lang, lang_code)
 
@@ -539,7 +551,6 @@ class LibraryThingImporter(LibraryThingRobot):
         #
         # First we check if the original language matches the primary or
         # secondary language. If so we can use the same language code.
-        #
         # Otherwise, we use the last value in the list.
         for n, c in zip(book_data.get('language', ()),
                         book_data.get('language_codeA', ())):
@@ -549,6 +560,24 @@ class LibraryThingImporter(LibraryThingRobot):
         else:
             ocode = get_path(book_data, 'originallanguage_codeA', -1)
         self.set_language('original', 'bookedit_lang_original', oname, ocode)
+
+    def set_languages(self, book_data, extra_langs):
+        if extra_langs:
+            for key, eid in (('primary', 'bookedit_lang'),
+                             ('secondary', 'bookedit_lang2'),
+                             ('original', 'bookedit_lang_original')):
+                lang_data = extra_langs.get(key)
+                if lang_data:
+                    self.set_language(
+                        key, eid, lang_data['name'], lang_data['code'])
+        else:
+            self.set_language('primary', 'bookedit_lang',
+                              get_path(book_data, 'language', 0),
+                              get_path(book_data, 'language_codeA', 0))
+            self.set_language('secondary', 'bookedit_lang2',
+                              get_path(book_data, 'language', 1),
+                              get_path(book_data, 'language_codeA', 1))
+            self.set_original_language(book_data)
 
     def set_reading_dates(self, date_started, date_finished):
         """Set reading dates."""
@@ -798,13 +827,7 @@ class LibraryThingImporter(LibraryThingRobot):
         self.set_weights(book_data.get('weight'))
 
         # Languages
-        self.set_language('primary', 'bookedit_lang',
-                          get_path(book_data, 'language', 0),
-                          get_path(book_data, 'language_codeA', 0))
-        self.set_language('secondary', 'bookedit_lang2',
-                          get_path(book_data, 'language', 1),
-                          get_path(book_data, 'language_codeA', 1))
-        self.set_original_language(book_data)
+        self.set_languages(book_data, extra_data.get('languages'))
 
         # Reading dates
         self.set_reading_dates(book_data.get('datestarted'),

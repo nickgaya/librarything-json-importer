@@ -87,6 +87,23 @@ class LibraryThingScraper(LibraryThingRobot):
             cover_data['confirmed'] = self.check_cover_confirmed(div, anchor)
         return cover_data
 
+    def get_languages(self):
+        """Get primary/secondary/original languages."""
+        langs = {}
+        for key, eid in (('primary', 'lang'),
+                         ('secondary', 'lang2'),
+                         ('original', 'lang_original')):
+            elt = self.driver.find_element_by_id(f'bookedit_{eid}')
+            if elt.is_displayed():
+                lang = elt.text
+                data_elt = self.driver.find_element_by_id(
+                    f'bookedit_{eid}-data')
+                # Use innerText attribute to get text content of hidden element
+                lang_code = data_elt.get_attribute('innerText')
+                langs[key] = {'name': lang, 'code': lang_code}
+                logger.debug("Found %s language %r (%s)", key, lang, lang_code)
+        return langs
+
     def process_book(self, book_id, book_data):
         """Extract extra information about a book."""
         logger.info("Processing book %s: %s", book_id, book_data['title'])
@@ -100,6 +117,7 @@ class LibraryThingScraper(LibraryThingRobot):
         extra = {}
         extra['secondary_authors'] = self.get_secondary_authors()
         extra['cover'] = self.get_cover()
+        extra['languages'] = self.get_languages()
 
         extra_data = self.extra.setdefault(book_id, {})
         extra_data['_extra'] = extra

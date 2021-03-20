@@ -79,6 +79,15 @@ class LibraryThingScraper(LibraryThingRobot):
             dates.append({'started': started, 'finished': finished})
         return dates
 
+    def get_lexile(self):
+        """Get book lexile value."""
+        elt = try_find(self.driver.find_element_by_id, 'bookedit_lexile')
+        if not elt:
+            return None
+        value = elt.text
+        logger.debug("Found Lexile value: %r", value)
+        return value
+
     venue_path_re = re.compile('/venue/([^/]+)')
 
     def get_from_where(self):
@@ -162,6 +171,8 @@ class LibraryThingScraper(LibraryThingRobot):
         extra['languages'] = self.get_languages()
         # Get complete list of reading dates
         extra['reading_dates'] = self.get_reading_dates()
+        # Get Lexile value
+        extra['lexile'] = self.get_lexile()
         # Get venue details - native export does not distinguish between venue
         # and free-text, or record venue id
         extra['from_where'] = self.get_from_where()

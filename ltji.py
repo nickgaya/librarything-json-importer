@@ -961,6 +961,7 @@ class LibraryThingImporter(LibraryThingRobot):
         # Classification
         set_text(self.driver, 'form_lccallnumber',
                  get_path(book_data, 'lcc', 'code'))
+        set_text(self.driver, 'form_lexile', extra_data.get('lexile'))
         set_text(self.driver, 'form_dewey',
                  get_path(book_data, 'ddc', 'code', 0))
         set_text(self.driver, 'form_btc_callnumber',

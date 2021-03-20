@@ -590,23 +590,38 @@ class LibraryThingImporter(LibraryThingRobot):
             set_text(parent, f'dr_start_{i+1}', None)
             set_text(parent, f'dr_end_{i+1}', None)
 
+    venue_path_re = re.compile('/venue/([^/]+)')
+
+    def get_venue_id(self, anchor):
+        """Get the venue id from a link to the venue."""
+        href = urlparse(anchor.get_attribute('href'))
+        return self.venue_path_re.match(href.path).group(1)
+
     def parse_from_where(self, scope):
         """Find the current "From where?" value and "change"/"edit" link."""
         div = scope.find_element_by_css_selector(
-            ':scope > div[class="location"]')
+            ':scope > div.location')
         anchors = div.find_elements_by_tag_name('a')
         if len(anchors) == 1:
             # Free text location or no location
             change_link = anchors[0]
             location = div.text[:-(len(change_link.text) + 2)].strip()
+            venue_id = None
+            if location:
+                logger.debug("Current 'From where' value: %r, free text",
+                             location)
+            else:
+                logger.debug("Current 'From where' value: blank")
         elif len(anchors) == 2:
             # Venue
-            location = anchors[0].text
             change_link = anchors[1]
+            location = anchors[0].text
+            venue_id = self.get_venue_id(anchors[0])
+            logger.debug("Current 'From where' value: %r, venue id %r",
+                         location, venue_id)
         else:
-            raise RuntimeError("Unable to parse location field")
-
-        return location, change_link
+            raise RuntimeError("Unable to parse 'From where' field")
+        return location, venue_id, change_link
 
     def open_location_popup(self, change_link):
         """Open the location editing popup."""
@@ -624,84 +639,176 @@ class LibraryThingImporter(LibraryThingRobot):
             ':scope > p:nth-of-type(3) > a')
         logger.debug("Clicking location remove link")
         remove_link.click()
+        self.wait_until(EC.staleness_of(popup))
 
-    def select_already_used_location(self, popup, from_where):
-        """Select a location from the already used location list."""
-        locations = popup.find_elements_by_css_selector(
-            '#locationlist > p > a:nth-of-type(1)')
-        for anchor in locations:
-            if anchor.text == from_where:
-                logger.debug("Selecting already used venue %r", from_where)
-                anchor.click()
-                self.wait_until(EC.staleness_of(popup))
-                return True
-        return False
-
-    def search_for_venue(self, popup, from_where):
-        """Search for a venue by name."""
-        if self.config.no_venue_search:
+    def select_already_used_venue_id(self, popup, venue_name, venue_id):
+        """Select a location from the already used list by venue id."""
+        venue_link = try_find(
+            popup.find_element_by_css_selector,
+            f'#locationlist > p > a[href="/venue/{venue_id}"], '
+            f'#locationlist > p > a[href$="/venue/{venue_id}/"]')
+        if not venue_link:
             return False
+        paragraph = get_parent(venue_link)
+        anchor = paragraph.find_element_by_css_selector(
+            ':scope > a:nth-of-type(1)')
+        this_name = anchor.text
+        if this_name != venue_name:
+            logger.warning("Venue with id %r has name %r, expected %r",
+                           venue_id, this_name, venue_name)
+        logger.debug("Selecting already used venue %r, id %r",
+                     this_name, venue_id)
+        anchor.click()
+        self.wait_until(EC.staleness_of(popup))
+        return True
+
+    def select_already_used_location(self, popup, venue_name):
+        """Select a location from the already used list by name."""
+        div = popup.find_element_by_id('locationlist')
+        anchor = try_find(div.find_element_by_link_text, venue_name)
+        if not anchor:
+            return False
+        # Make sure we actually found the right kind of link, or fall back to
+        # iterating over the list by selector and checking each one
+        selector = '#locationlist > p > a:nth-of-type(1)'
+        if not self.driver.execute_script(
+                "arguments[0].matches(arguments[1])", anchor, selector):
+            for anchor in popup.find_elements_by_css_selector(selector):
+                if anchor.text == venue_name:
+                    break
+            else:
+                return False
+        # Get venue id for logging purposes
+        paragraph = get_parent(anchor)
+        venue_anchor = try_find(
+            paragraph.find_element_by_css_selector,
+            ':scope > a:nth-of-type(2)')
+        this_venue_id = (self.get_venue_id(venue_anchor) if venue_anchor
+                         else None)
+        if this_venue_id:
+            logger.debug("Selecting already used venue %r, id %r",
+                         venue_name, this_venue_id)
+        else:
+            logger.debug("Selecting already used venue %r, free text",
+                         venue_name)
+        anchor.click()
+        self.wait_until(EC.staleness_of(popup))
+        return True
+
+    def search_for_venue(self, popup, venue_name, venue_id):
+        """Search for a venue by name."""
+        tab = popup.find_element_by_id('lbtabarea1')
         logger.debug("Choosing 'Venue search' tab")
         popup.find_element_by_id('lbtabchromemenu1').click()
-        form = popup.find_element_by_id('venuesearchform')
+        self.wait_until(EC.visibility_of(tab))
+        form = tab.find_element_by_id('venuesearchform')
         search_field = form.find_element_by_css_selector('input[name="query"]')
-        logger.debug("Populating venue search field")
+        logger.debug("Populating venue search field with %r", venue_name)
         search_field.clear()
         search_field.send_keys('"')
-        search_field.send_keys(from_where)
+        search_field.send_keys(venue_name)
         search_field.send_keys('"')
         submit_button = form.find_element_by_css_selector(
             'input[name="Submit"]')
+        results = popup.find_element_by_id('venuelist')
         logger.debug("Clicking search button")
         submit_button.click()
-        results = popup.find_element_by_id('venuelist')
         self.wait_until(lambda _: 'updating' not in get_class_list(results))
-        venues = results.find_elements_by_css_selector(
-            ':scope > p > a:nth-of-type(1)')
-        for anchor in venues:
-            if anchor.text == from_where:
-                logger.debug("Selecting venue %r", from_where)
-                anchor.click()
-                self.wait_until(EC.staleness_of(popup))
-                return True
-        return False
+        if venue_id:
+            venue_link = try_find(
+                results.find_element_by_css_selector,
+                f':scope > p > a[href="/venue/{venue_id}"], '
+                f':scope > p > a[href$="/venue/{venue_id}/"]')
+            if not venue_link:
+                return False
+            paragraph = get_parent(venue_link)
+            anchor = paragraph.find_element_by_css_selector('a:nth-of-type(1)')
+            this_name = anchor.text
+            this_venue_id = venue_id
+            if this_name != venue_name:
+                logger.warning("Venue with id %r has name %r, expected %r",
+                               venue_id, this_name, venue_name)
+        else:
+            anchor = try_find(results.find_element_by_link_text, venue_name)
+            if not anchor:
+                return False
+            # Make sure we found the right kind of link, if not fall back to
+            # iterating over the list
+            if not self.driver.execute_script(
+                    "arguments[0].matches(arguments[1])", anchor,
+                    '#venuelist > p > a:nth-of-type(1)'):
+                for anchor in results.find_elements_by_css_selector(
+                        ':scope > p > a:nth-of-type(1)'):
+                    if anchor.text == venue_name:
+                        break
+                else:
+                    return False
+            paragraph = get_parent(anchor)
+            venue_link = paragraph.find_element_by_css_selector(
+                ':scope > a:nth-of-type(2)')
+            this_name = venue_name
+            this_venue_id = self.get_venue_id(venue_link)
+        logger.debug("Selecting venue %r, id %r", this_name, this_venue_id)
+        anchor.click()
+        self.wait_until(EC.staleness_of(popup))
+        return True
 
     def set_from_where_free_text(self, popup, from_where):
         """Enter a free-text location value."""
+        tab = popup.find_element_by_id('lbtabarea2')
         logger.debug("Choosing 'Free text' tab")
         popup.find_element_by_id('lbtabchromemenu2').click()
-        form = popup.find_element_by_id('freetextform')
+        self.wait_until(EC.visibility_of(tab))
+        form = tab.find_element_by_id('freetextform')
         set_text(form, 'textareacomments', from_where)
         submit_button = form.find_element_by_css_selector(
             'input[name="Submit"]')
         logger.debug("Saving location")
         submit_button.click()
+        self.wait_until(EC.staleness_of(popup))
 
-    def set_location(self, popup, from_where):
+    def set_location(self, popup, venue_name, venue_id, has_extra):
         """Use the location editing pop-up to set a location."""
-        # Check if venue is already used
-        if self.select_already_used_location(popup, from_where):
+        # Check for already used venue
+        if venue_id and self.select_already_used_venue_id(
+                popup, venue_name, venue_id):
             return
-        # Search for venue by name
-        if self.search_for_venue(popup, from_where):
+        elif (not has_extra) and self.select_already_used_location(
+                popup, venue_name):
+            return
+        # Search for venue
+        if (venue_id or not has_extra) and self.search_for_venue(
+                popup, venue_name, venue_id):
             return
         # Enter location as free text
-        self.set_from_where_free_text(popup, from_where)
+        if venue_id:
+            logger.warning("Didn't find venue with name %r, id %r, "
+                           "falling back to free text", venue_name, venue_id)
+        self.set_from_where_free_text(popup, venue_name)
 
-    def set_from_where(self, from_where):
+    def set_from_where(self, from_where, extra_fw):
         """Set the "From where?" field."""
+        if extra_fw:
+            venue_name = extra_fw['name']
+            venue_id = extra_fw.get('venue_id')
+            if venue_id:
+                assert venue_id.isascii() and venue_id.isalnum()
+            has_extra = True
+        else:
+            venue_name = from_where
+            venue_id = None
+            has_extra = False
         parent = self.driver.find_element_by_id('bookedit_datestarted')
-        location, change_link = self.parse_from_where(parent)
-        if not from_where:
-            if location:
+        curr_name, curr_id, change_link = self.parse_from_where(parent)
+        if not venue_name:
+            if curr_name:
                 popup = self.open_location_popup(change_link)
                 self.clear_location(popup)
-                self.wait_until(EC.staleness_of(popup))
             return
-        if location != from_where:
+        if curr_name != venue_name or (has_extra and venue_id != curr_id):
             popup = self.open_location_popup(change_link)
-            self.set_location(popup, from_where)
-            self.wait_until(EC.staleness_of(popup))
+            self.set_location(popup, venue_name, venue_id, has_extra)
+        return True
 
     def set_physical_summary(self, physical_description):
         """Set the physical summary field."""
@@ -837,7 +944,8 @@ class LibraryThingImporter(LibraryThingRobot):
         set_text(self.driver, 'form_datebought', book_data.get('dateacquired'))
 
         # From where
-        self.set_from_where(book_data.get('fromwhere'))
+        self.set_from_where(book_data.get('fromwhere'),
+                            extra_data.get('from_where'))
 
         # Classification
         set_text(self.driver, 'form_lccallnumber',
@@ -1336,9 +1444,6 @@ if __name__ == '__main__':
                         f"{', '.join(LibraryThingImporter.id_keys)}")
     parser.add_argument('-t', '--tag',
                         help="Tag to add to all imported books.")
-    parser.add_argument('--no-venue-search', action='store_true',
-                        help="Don't search for venues when setting the "
-                        "'From where?' field")
     parser.add_argument('--physical-summary', choices=('auto', 'json'),
                         default='auto', help="How to set the 'Physical "
                         "summary' field: 'auto', leave blank for LibraryThing "

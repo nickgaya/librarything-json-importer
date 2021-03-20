@@ -4,6 +4,7 @@ import json
 import logging
 import os.path
 import re
+from urllib.parse import urlparse
 
 from selenium.webdriver.common.action_chains import ActionChains
 
@@ -64,7 +65,33 @@ class LibraryThingScraper(LibraryThingRobot):
                 logger.debug("Found %s language %r (%s)", key, lang, lang_code)
         return langs
 
+    venue_path_re = re.compile('/venue/([^/]+)')
+
+    def get_from_where(self):
+        """Get book venue information."""
+        div = try_find(self.driver.find_element_by_id, 'bookedit_datestarted')
+        if not div:
+            logger.debug("'From where' field not found")
+            return None
+        name = div.text
+        if not name:
+            logger.debug("Found blank 'From where' field")
+            return {'name': ''}
+        anchor = try_find(div.find_element_by_css_selector, '.xlocation > a')
+        if anchor:
+            # Parse venue link
+            href = urlparse(anchor.get_attribute('href'))
+            venue_id = self.venue_path_re.match(href.path).group(1)
+            logger.debug("Found 'From where' field %r, venue id %r",
+                         name, venue_id)
+            return {'name': name, 'venue_id': venue_id}
+        else:
+            # Free text
+            logger.debug("Found 'From where' field %r, free text", name)
+            return {'name': name}
+
     def check_cover_confirmed(self, div, anchor):
+        """Check whether the current book cover is user-confirmed."""
         # For some reason clicking on the anchor doesn't work; we have to click
         # on the image element
         icon = anchor.find_element_by_css_selector('img.icon')
@@ -119,6 +146,9 @@ class LibraryThingScraper(LibraryThingRobot):
         extra['secondary_authors'] = self.get_secondary_authors()
         # Get languages in a more convenient format than native export
         extra['languages'] = self.get_languages()
+        # Get venue details - native export does not distinguish between venue
+        # and free-text, or record venue id
+        extra['from_where'] = self.get_from_where()
         # Get cover details
         extra['cover'] = self.get_cover()
 

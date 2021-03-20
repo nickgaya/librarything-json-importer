@@ -982,27 +982,29 @@ class LibraryThingRobot:
             rbs[name.casefold()] = rb, name
         return rbs
 
-    # Maps of lowercase source names to link text
+    # Maps of lowercase source names to source ids
     featured_sources = {}
     all_sources = {}
 
     def parse_sources(self, section, sources):
+        """Parse list of sources."""
         logger.debug("Parsing sources in section %r",
                      section.get_attribute('id'))
         for link in section.find_elements_by_css_selector('a[data-source-id]'):
-            ltext = link.text
-            sources[ltext.casefold()] = ltext
+            source_id = link.get_attribute('data-source-id')
+            sources[link.text.casefold()] = source_id
 
     def add_source_in_section(self, scope, section, sources, lsource):
         """Add a source in a given section of the add sources lightbox."""
         if not sources:
             self.parse_sources(section, sources)
-        ltext = sources.get(lsource)
-        if not ltext:
+        source_id = sources.get(lsource)
+        if not source_id:
             return False
-        link = section.find_element_by_link_text(ltext)
+        link = section.find_element_by_css_selector(
+            f'#libraryAddContainer a[data-source-id="{source_id}"]')
         if link.get_attribute('data-library-added') != '1':
-            logger.debug("Adding source %r", ltext)
+            logger.debug("Adding source %r, id %r", link.text, source_id)
             link.click()
             self.wait_until(
                 lambda _: link.get_attribute('data-library-added-new') == '1')

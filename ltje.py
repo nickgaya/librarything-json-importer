@@ -149,7 +149,7 @@ class LibraryThingScraper(LibraryThingRobot):
         # Get venue details - native export does not distinguish between venue
         # and free-text, or record venue id
         extra['from_where'] = self.get_from_where()
-        # Get cover details
+        # Get cover details, not present in native export
         extra['cover'] = self.get_cover()
 
         extra_data = self.extra.setdefault(book_id, {})

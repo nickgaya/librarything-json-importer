@@ -1213,14 +1213,13 @@ class LibraryThingImporter(LibraryThingRobot):
         submit = confirm.find_element_by_css_selector('input[type="submit"]')
         if info:
             # Variant 1: Cover info dialog
-            logger.debug("Clicking cover info 'confirm' button")
+            logger.debug("Confirming cover selection")
             submit.click()
             alert = self.wait_until(EC.alert_is_present())
             alert.accept()
         else:
             # Variant 2: "Choose this cover" dialog
-            self.click_link(submit,
-                            "Clicking cover selection 'confirm' button")
+            self.click_link(submit, "Confirming cover selection")
 
     cover_onclick_re = re.compile(r"si_info\('([^']*)'\)")
 
@@ -1230,6 +1229,7 @@ class LibraryThingImporter(LibraryThingRobot):
         anchor = div.find_element_by_tag_name('a')
         match = self.cover_onclick_re.match(anchor.get_attribute('onclick'))
         current_cover_id = match.group(1)
+        logger.debug("Current cover id: %r", current_cover_id)
         if current_cover_id != cover_id:
             return False
         # Cover id matches, confirm

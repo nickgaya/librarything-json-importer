@@ -88,6 +88,15 @@ class LibraryThingScraper(LibraryThingRobot):
         logger.debug("Found Lexile value: %r", value)
         return value
 
+    def get_dewey(self):
+        """Get book DDC if manually set."""
+        elt = try_find(self.driver.find_element_by_id, 'bookedit_dewey')
+        if not elt or not elt.is_displayed():
+            return None
+        value = elt.text
+        logger.debug("Found Dewey value: %r", value)
+        return value
+
     venue_path_re = re.compile('/venue/([^/]+)')
 
     def get_from_where(self):
@@ -173,6 +182,9 @@ class LibraryThingScraper(LibraryThingRobot):
         extra['reading_dates'] = self.get_reading_dates()
         # Get Lexile value
         extra['lexile'] = self.get_lexile()
+        # Get Dewey value if set by user - native export does not indicate
+        # whether the value was specified by the user
+        extra['dewey'] = self.get_dewey()
         # Get venue details - native export does not distinguish between venue
         # and free-text, or record venue id
         extra['from_where'] = self.get_from_where()

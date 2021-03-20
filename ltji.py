@@ -579,16 +579,28 @@ class LibraryThingImporter(LibraryThingRobot):
                               get_path(book_data, 'language_codeA', 1))
             self.set_original_language(book_data)
 
-    def set_reading_dates(self, date_started, date_finished):
+    def set_reading_dates(self, started, finished, extra_dates):
         """Set reading dates."""
+        dates = extra_dates or [{'started': started, 'finished': finished}]
         parent = self.driver.find_element_by_id('startedfinished')
-        rows = parent.find_elements_by_css_selector(
-            'table.startedfinished > tbody > tr:not(.hidden)')
-        set_text(parent, 'dr_start_1', date_started)
-        set_text(parent, 'dr_end_1', date_finished)
-        for i in range(1, len(rows)):
-            set_text(parent, f'dr_start_{i+1}', None)
-            set_text(parent, f'dr_end_{i+1}', None)
+        rows = parent.find_elements_by_css_selector('tr[id^="xSF"]')
+        assert len(dates) <= len(rows)
+        for i in range(len(dates)):
+            row = rows[i]
+            if not row.is_displayed():
+                assert i > 0
+                logger.debug("Adding reading dates %d", i+1)
+                rows[i-1].find_element_by_css_selector(f'#xmore{i} a').click()
+                self.wait_until(EC.visibility_of(row))
+            set_text(row, f'dr_start_{i+1}', dates[i]['started'])
+            set_text(row, f'dr_end_{i+1}', dates[i]['finished'])
+        # Clear any additional rows
+        for i in range(len(dates), len(rows)):
+            row = rows[i]
+            if not row.is_displayed():
+                break
+            set_text(row, f'dr_start_{i+1}', None)
+            set_text(row, f'dr_end_{i+1}', None)
 
     venue_path_re = re.compile('/venue/([^/]+)')
 
@@ -938,7 +950,8 @@ class LibraryThingImporter(LibraryThingRobot):
 
         # Reading dates
         self.set_reading_dates(book_data.get('datestarted'),
-                               book_data.get('dateread'))
+                               book_data.get('dateread'),
+                               extra_data.get('reading_dates'))
 
         # Date acquired
         set_text(self.driver, 'form_datebought', book_data.get('dateacquired'))

@@ -65,11 +65,25 @@ class LibraryThingScraper(LibraryThingRobot):
                 logger.debug("Found %s language %r (%s)", key, lang, lang_code)
         return langs
 
+    def get_reading_dates(self):
+        """Get list of reading dates."""
+        dates = []
+        div = try_find(self.driver.find_element_by_id, 'startedfinished')
+        if not div:
+            return dates
+        for row in div.find_elements_by_css_selector('tr[id^="xSF"]'):
+            std, ftd = row.find_elements_by_tag_name('td')
+            started = std.text.strip()
+            finished = ftd.text.strip()
+            logger.debug("Found reading dates: %r, %r", started, finished)
+            dates.append({'started': started, 'finished': finished})
+        return dates
+
     venue_path_re = re.compile('/venue/([^/]+)')
 
     def get_from_where(self):
         """Get book venue information."""
-        div = try_find(self.driver.find_element_by_id, 'bookedit_datestarted')
+        div = try_find(self.driver.find_element_by_class_name, 'xlocation')
         if not div:
             logger.debug("'From where' field not found")
             return None
@@ -146,6 +160,8 @@ class LibraryThingScraper(LibraryThingRobot):
         extra['secondary_authors'] = self.get_secondary_authors()
         # Get languages in a more convenient format than native export
         extra['languages'] = self.get_languages()
+        # Get complete list of reading dates
+        extra['reading_dates'] = self.get_reading_dates()
         # Get venue details - native export does not distinguish between venue
         # and free-text, or record venue id
         extra['from_where'] = self.get_from_where()

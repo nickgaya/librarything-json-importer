@@ -6,6 +6,7 @@ import os.path
 import re
 import time
 from contextlib import nullcontext
+from textwrap import dedent
 from urllib.parse import urlparse
 
 from selenium import webdriver
@@ -364,6 +365,13 @@ class LibraryThingRobot:
 
     langs = {}  # Map of language strings to selection values
 
+    def parse_review_langs(self, select):
+        logger.debug("Populating review language code map")
+        self.langs.update(self.driver.execute_script(dedent("""\
+            return Array.from(arguments[0].querySelectorAll('option'))
+                .slice(3).map(opt => [opt.innerText, opt.value]);
+        """), select._el))
+
     def set_review_language(self, lang):
         """Set review language."""
         if not lang:
@@ -383,9 +391,7 @@ class LibraryThingRobot:
         select = Select(self.wait_until(
             lambda _: parent_elt.find_element_by_css_selector('select')))
         if not self.langs:
-            logger.debug("Populating language code map")
-            for opt in select.options[3:]:
-                self.langs[opt.text] = opt.get_attribute('value')
+            self.parse_review_langs(select)
         if lang in self.langs:
             value = self.langs[lang]
             select_by_value(select, value,
@@ -990,9 +996,15 @@ class LibraryThingRobot:
         """Parse list of sources."""
         logger.debug("Parsing sources in section %r",
                      section.get_attribute('id'))
-        for link in section.find_elements_by_css_selector('a[data-source-id]'):
-            source_id = link.get_attribute('data-source-id')
-            sources[link.text.casefold()] = source_id
+        link_info = self.driver.execute_script(dedent("""\
+            let elts = arguments[0].querySelectorAll(
+                    '#libraryAddContainer a[data-source-id]');
+            return Array.from(elts).map(elt => ({
+                "text": elt.innerText,
+                "sourceId": elt.dataset.sourceId,
+            }));"""), section)
+        for item in link_info:
+            sources[item['text'].casefold()] = item['sourceId']
 
     def add_source_in_section(self, scope, section, sources, lsource):
         """Add a source in a given section of the add sources lightbox."""

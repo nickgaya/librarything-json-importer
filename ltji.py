@@ -646,7 +646,7 @@ class LibraryThingImporter(LibraryThingRobot):
         venue_link = try_find(
             popup.find_element_by_css_selector,
             f'#locationlist > p > a[href="/venue/{venue_id}"], '
-            f'#locationlist > p > a[href$="/venue/{venue_id}/"]')
+            f'#locationlist > p > a[href^="/venue/{venue_id}/"]')
         if not venue_link:
             return False
         paragraph = get_parent(venue_link)
@@ -718,7 +718,7 @@ class LibraryThingImporter(LibraryThingRobot):
             venue_link = try_find(
                 results.find_element_by_css_selector,
                 f':scope > p > a[href="/venue/{venue_id}"], '
-                f':scope > p > a[href$="/venue/{venue_id}/"]')
+                f':scope > p > a[href^="/venue/{venue_id}/"]')
             if not venue_link:
                 return False
             paragraph = get_parent(venue_link)

@@ -622,8 +622,6 @@ class LibraryThingImporter(LibraryThingRobot):
             if location:
                 logger.debug("Current 'From where' value: %r, free text",
                              location)
-            else:
-                logger.debug("Current 'From where' value: blank")
         elif len(anchors) == 2:
             # Venue
             change_link = anchors[1]

@@ -1145,9 +1145,9 @@ class LibraryThingImporter(LibraryThingRobot):
 
     # Map from identifier names to book data paths
     id_keys = {
+        'asin': 'asin',
         'ean': ('ean', 0),
         'upc': ('upc', 0),
-        'asin': 'asin',
         'lccn': 'lccn',
         'oclc': 'oclc',
         'isbn': 'originalisbn',

@@ -423,23 +423,17 @@ class LibraryThingImporter(LibraryThingRobot):
 
     def set_pagination(self, scope, i, fieldset, num):
         """Set a pagination item."""
+        # Set page count
         count_elt = fieldset.find_element_by_css_selector(
             'input[name="pagecount"]')
-        type_elt = Select(fieldset.find_element_by_tag_name('select'))
-        if not num:
-            # Clear fieldset
-            if count_elt.get_attribute('value'):
-                logger.debug("Clearing pagination %d", i+1)
-                count_elt.clear()
-            return
-        if count_elt.get_attribute('value') != num:
-            logger.debug("Setting pagination %d to %r", i+1, num)
-            count_elt.clear()
-            count_elt.send_keys(num)
-        pt_name, pt_value = self.guess_page_type(num)
-        select_by_value(type_elt, pt_value,
-                        "Setting type of pagination %d to %r (%s)",
-                        i+1, pt_name, pt_value)
+        set_text_elt(count_elt, num, "pagination %d", i+1)
+        if num:
+            # Set pagination type
+            pt_name, pt_value = self.guess_page_type(num)
+            type_elt = Select(fieldset.find_element_by_tag_name('select'))
+            select_by_value(type_elt, pt_value,
+                            "Setting type of pagination %d to %r (%s)",
+                            i+1, pt_name, pt_value)
 
     def set_paginations(self, pages):
         """Set pagination."""
@@ -493,25 +487,17 @@ class LibraryThingImporter(LibraryThingRobot):
 
     def set_weight(self, scope, i, fs, wstr):
         """Set a weight item."""
-        weight_elt = fs.find_element_by_css_selector('input[name="weight"]')
-        if not wstr:
-            # Clear value field
-            if weight_elt.get_attribute('value'):
-                logger.debug("Clearing weight %d", i+1)
-                weight_elt.clear()
-            return
+        num, unit = wstr.split() if wstr else (None, None)
         # Set value field
-        num, unit = wstr.split()
-        if weight_elt.get_attribute('value') != num:
-            logger.debug("Setting weight %d to %r", i+1, num)
-            weight_elt.clear()
-            weight_elt.send_keys(num)
-        # Set unit
-        uname, uvalue = self.get_weight_unit(unit)
-        unit_elt = Select(fs.find_element_by_tag_name('select'))
-        select_by_value(unit_elt, uvalue,
-                        "Setting unit of weight %d to %r (%s)",
-                        i+1, uname, uvalue)
+        weight_elt = fs.find_element_by_css_selector('input[name="weight"]')
+        set_text_elt(weight_elt, num, "weight %d", i+1)
+        if num:
+            # Set unit
+            uname, uvalue = self.get_weight_unit(unit)
+            unit_elt = Select(fs.find_element_by_tag_name('select'))
+            select_by_value(unit_elt, uvalue,
+                            "Setting unit of weight %d to %r (%s)",
+                            i+1, uname, uvalue)
 
     def set_weights(self, weight_str):
         """Set weights."""

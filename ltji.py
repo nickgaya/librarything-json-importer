@@ -370,8 +370,10 @@ class LibraryThingImporter(LibraryThingRobot):
             # Add new media type
             logger.debug("Selecting 'Add media' in media type menu")
             select.select_by_value('addmedia')
-            set_text(parent, 'newmedia', format_text)
-            set_select(parent, 'nestunder', format_code.rsplit('.', 1)[0])
+            change_div = self.driver.find_element_by_id('changemediadiv')
+            self.wait_until(EC.visibility_of(change_div))
+            set_text(change_div, 'newmedia', format_text)
+            set_select(change_div, 'nestunder', format_code.rsplit('.', 1)[0])
         else:
             raise RuntimeError(f"Failed to set format {format_text!r} "
                                "({format_code})")

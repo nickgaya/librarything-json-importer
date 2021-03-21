@@ -227,9 +227,6 @@ def init_extra_data(config, data):
     if config.update and os.path.exists(config.outfile):
         with open(config.outfile) as f:
             return json.load(f)
-    # If --merge is set, add extra data to book data
-    elif config.merge:
-        return data
     # Otherwise create an empty dict for extra data
     else:
         return {}
@@ -241,11 +238,8 @@ if __name__ == '__main__':
     parser.add_argument('-l', '--login', action='store_true',
                         help="Log in to LibraryThing to allow access to "
                         "private book information.")
-    group = parser.add_mutually_exclusive_group()
-    group.add_argument('-m', '--merge', action='store_true',
-                       help="Add extra data to book data")
-    group.add_argument('-u', '--update', action='store_true',
-                       help="Update output file instead of replacing")
+    parser.add_argument('-u', '--update', action='store_true',
+                        help="Update output file instead of replacing")
     parser.add_argument('infile', help="Input file containing JSON book data.")
     parser.add_argument('outfile', help="Output file to write data")
     config = parser.parse_args()

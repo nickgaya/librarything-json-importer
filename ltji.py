@@ -878,7 +878,8 @@ class LibraryThingImporter(LibraryThingRobot):
                                name, value, expected)
         else:
             if value:
-                logger.warning("Book has %s value %r, expected no value")
+                logger.warning("Book has %s value %r, expected no value",
+                               name, value)
 
     def check_immutable_identifiers(self, ean, upc, asin, lccn, oclc):
         """Check immutable identifier fields."""

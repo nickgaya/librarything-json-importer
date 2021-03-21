@@ -1315,8 +1315,9 @@ class LibraryThingImporter(LibraryThingRobot):
     def set_cover_from_list(self, div_id, term, cover_id, cpfx, cid):
         """Set cover by id from the specified section."""
         div = self.driver.find_element_by_id(div_id)
+        self.wait_until(lambda _: 'updating' not in get_class_list(div))
         cover_div_id = f'am_{cid}' if cpfx == 'isbn' else cover_id
-        cover_div = try_find(self.driver.find_element_by_id, cover_div_id)
+        cover_div = try_find(div.find_element_by_id, cover_div_id)
         if not cover_div:
             show_all = try_find(div.find_element_by_css_selector,
                                 'p.limitedlink a')
@@ -1325,8 +1326,7 @@ class LibraryThingImporter(LibraryThingRobot):
                 show_all.click()
                 self.wait_until(
                     lambda _: 'updating' not in get_class_list(div))
-                cover_div = try_find(self.driver.find_element_by_id,
-                                     cover_div_id)
+                cover_div = try_find(div.find_element_by_id, cover_div_id)
             if not cover_div:
                 return False  # Cover not found
         logger.debug("Selecting %s cover with id %r", term, cover_id)

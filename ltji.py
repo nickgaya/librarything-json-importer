@@ -1,85 +1,43 @@
+"""Script to import JSON book data to LibraryThing using Selenium."""
 import argparse
 import json
 import logging
 import math
-import os.path
 import re
 import time
-from contextlib import nullcontext
 from textwrap import dedent
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
-from selenium import webdriver
-from selenium.common.exceptions import (
-    NoSuchElementException, NoSuchWindowException)
+from selenium.common.exceptions import NoSuchElementException
+from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.by import By
-from selenium.webdriver.remote.webdriver import WebDriver
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.support.ui import Select, WebDriverWait
+from selenium.webdriver.support.ui import Select
+
+from _common import (
+    LibraryThingRobot,
+    add_common_flags,
+    defocus,
+    get_class_list,
+    get_inline_styles,
+    get_parent,
+    get_path,
+    init_logging,
+    main_loop,
+    normalize_newlines,
+    page_loaded_condition,
+    parse_book_ids,
+    parse_list,
+    try_find,
+)
+
+parse_book_ids
 
 logger = logging.getLogger('ltji')
 
 
-def get_path(obj, *keys):
-    """Extract a value from a JSON data structure."""
-    for key in keys:
-        if not obj:
-            return obj
-        if isinstance(key, int):
-            try:
-                obj = obj[key]
-            except IndexError:
-                return None
-        elif isinstance(key, str):
-            obj = obj.get(key)
-        else:
-            raise TypeError(f"Invalid key type: {type(key).__qualname__}")
-    return obj
-
-
-def normalize_newlines(s):
-    """Normalize line breaks in a string."""
-    return s.replace('\r\n', '\n').replace('\r', '\n') if s else s
-
-
-def get_driver(scope):
-    """Return a WebDriver object given a driver or element."""
-    return scope if isinstance(scope, WebDriver) else scope.parent
-
-
-def get_class_list(elt):
-    """Return the list of CSS classes of an element."""
-    value = elt.get_attribute('class')
-    return value.split() if value else []
-
-
-def get_inline_styles(elt):
-    """Yield the (key, value) pairs of an element's style attribute."""
-    value = elt.get_attribute('style')
-    if not value:
-        return
-    for item in value.split(';'):
-        if item:
-            key, value = item.split(':', 1)
-            yield key.strip(), value.strip()
-
-
-def get_parent(elt):
-    """Get the parent of a given element."""
-    return elt.find_element_by_xpath('./..')
-
-
-def defocus(elt):
-    """Remove focus from a given element."""
-    get_driver(elt).execute_script("arguments[0].blur()", elt)
-
-
-def page_loaded_condition(driver):
-    """Expected condition for page load."""
-    return driver.execute_script("return document.readyState") == 'complete'
-
-
 def set_text_elt(elt, value, desc, *args):
+    """Set the contents of a text input field."""
     if value:
         value = normalize_newlines(value)
         if (elt.get_attribute('value') != value
@@ -133,70 +91,8 @@ def set_checkbox(scope, elt_id, selected):
     return checkbox
 
 
-class LibraryThingRobot:
-    """Class to perform automated flows on LibraryThing."""
-
-    def __init__(self, config, driver):
-        self.config = config
-        self.driver = driver
-
-    def wait_until(self, condition, seconds=10):
-        """Wait up to 10 seconds for the given wait condition."""
-        return WebDriverWait(self.driver, seconds).until(condition)
-
-    def wait_for_lb(self):
-        """Wait for the lightbox to appear and load."""
-        lb = self.wait_until(
-            EC.visibility_of_element_located((By.ID, 'LT_LB')))
-        loading = lb.find_element_by_id('LT_LB_loading')
-        self.wait_until(EC.invisibility_of_element(loading))
-        return lb.find_element_by_id('LT_LB_content')
-
-    def click_link(self, elt, message, *args):
-        html = self.driver.find_element_by_tag_name('html')
-        logger.debug(message, *args)
-        elt.click()
-        self.wait_until(EC.staleness_of(html))
-        self.wait_until(page_loaded_condition)
-
-    def user_alert(self, message):
-        """Display an alert to the user."""
-        self.driver.execute_script("alert(arguments[0])", message)
-        WebDriverWait(self.driver, 60).until_not(EC.alert_is_present())
-
-    def close_gdpr_banner(self):
-        """Dismiss GDPR banner if present."""
-        try:
-            banner = self.driver.find_element_by_id('gdpr_notice')
-        except NoSuchElementException:
-            return
-        logger.debug("Clicking GDPR banner 'I Agree' button")
-        banner.find_element_by_id('gdpr_closebutton').click()
-        self.wait_until(EC.invisibility_of_element(banner))
-
-    def login(self):
-        """Log in to LibraryThing."""
-        driver = self.driver
-        cookies_file = self.config.cookies_file
-        driver.get('https://www.librarything.com')
-        if cookies_file and os.path.exists(cookies_file):
-            logger.debug("Loading cookies from %r", cookies_file)
-            with open(cookies_file) as f:
-                cookies = json.load(f)
-            for cookie in cookies:
-                driver.add_cookie(cookie)
-            driver.get('https://www.librarything.com/home')
-        if not urlparse(driver.current_url).path == '/home':
-            self.user_alert("[LTJI] Log in and complete robot check")
-            logger.debug("Waiting for user login")
-            WebDriverWait(self.driver, 180).until(
-                lambda wd: urlparse(wd.current_url).path == '/home')
-        logger.debug("Login successful")
-        self.close_gdpr_banner()
-        if cookies_file:
-            with open(cookies_file, 'w') as f:
-                json.dump(driver.get_cookies(), f)
-            logger.debug("Saved cookies to %r", cookies_file)
+class LibraryThingImporter(LibraryThingRobot):
+    """Class to add books to LibraryThing."""
 
     def set_author_role(self, scope, elt_id, text):
         """Set author role with the given element id."""
@@ -272,6 +168,7 @@ class LibraryThingRobot:
         return cbs
 
     def show_all_collections(self, scope):
+        """Click button to show all collections."""
         buttons = scope.find_elements_by_css_selector(
             '.collectionListFooter .ltbtn')
         if len(buttons) != 2:
@@ -311,7 +208,7 @@ class LibraryThingRobot:
         logger.debug("Saving new collections")
         save_button.click()
         self.wait_until(EC.staleness_of(lb_content))
-        self.wait_until(page_loaded_condition)
+        self.wait_until(page_loaded_condition, 30)
         for cname in to_add:
             logger.info("Created collection %r", cname)
 
@@ -624,20 +521,33 @@ class LibraryThingRobot:
         """Set a language field specified by id."""
         parent = self.driver.find_element_by_id(elt_id)
         select = Select(parent.find_element_by_tag_name('select'))
-        if not lang or not lang_code:
+        if not lang:
             select_by_value(select, '', "Clearing %s language", term)
             return
-        if lang_code not in (opt.get_attribute('value')
-                             for opt in select.options):
-            # Didn't find the language code, try switching to all langauges
+        assert lang_code
+        # Determine whether the menu is currently showing all languages
+        # or just the short list
+        if parent.find_element_by_id('longList').get_attribute('value') == '1':
+            show_all = None  # Won't be used
+            short = False
+        else:
+            show_all = parent.find_element_by_css_selector(
+                '.bookEditHint > a')
+            # No good way to tell the current state other than looking at the
+            # link href attribute
+            short = (show_all.get_attribute('href') ==
+                     'javascript:book_updateLangMenus(1)')
+        if short and lang_code not in (opt.get_attribute('value')
+                                       for opt in select.options):
             logger.debug("Clicking 'show all languages' link")
-            parent.find_element_by_css_selector('.bookEditHint > a').click()
+            show_all.click()
             select = Select(self.wait_until(
-                lambda wd: parent.find_element_by_tag_name('select')))
+                lambda _: parent.find_element_by_tag_name('select')))
         select_by_value(select, lang_code,
                         "Selecting %s language %r (%s)", term, lang, lang_code)
 
     def set_original_language(self, book_data):
+        """Set the original language field."""
         oname = get_path(book_data, 'originallanguage', 0)
         if not oname:
             self.set_language('original', 'bookedit_lang_original', None, None)
@@ -648,7 +558,6 @@ class LibraryThingRobot:
         #
         # First we check if the original language matches the primary or
         # secondary language. If so we can use the same language code.
-        #
         # Otherwise, we use the last value in the list.
         for n, c in zip(book_data.get('language', ()),
                         book_data.get('language_codeA', ())):
@@ -659,34 +568,77 @@ class LibraryThingRobot:
             ocode = get_path(book_data, 'originallanguage_codeA', -1)
         self.set_language('original', 'bookedit_lang_original', oname, ocode)
 
-    def set_reading_dates(self, date_started, date_finished):
+    def set_languages(self, book_data, extra_langs):
+        if extra_langs:
+            for key, eid in (('primary', 'bookedit_lang'),
+                             ('secondary', 'bookedit_lang2'),
+                             ('original', 'bookedit_lang_original')):
+                lang_data = extra_langs.get(key)
+                if lang_data:
+                    self.set_language(
+                        key, eid, lang_data['name'], lang_data['code'])
+        else:
+            self.set_language('primary', 'bookedit_lang',
+                              get_path(book_data, 'language', 0),
+                              get_path(book_data, 'language_codeA', 0))
+            self.set_language('secondary', 'bookedit_lang2',
+                              get_path(book_data, 'language', 1),
+                              get_path(book_data, 'language_codeA', 1))
+            self.set_original_language(book_data)
+
+    def set_reading_dates(self, started, finished, extra_dates):
         """Set reading dates."""
+        dates = extra_dates or [{'started': started, 'finished': finished}]
         parent = self.driver.find_element_by_id('startedfinished')
-        rows = parent.find_elements_by_css_selector(
-            'table.startedfinished > tbody > tr:not(.hidden)')
-        set_text(parent, 'dr_start_1', date_started)
-        set_text(parent, 'dr_end_1', date_finished)
-        for i in range(1, len(rows)):
-            set_text(parent, f'dr_start_{i+1}', None)
-            set_text(parent, f'dr_end_{i+1}', None)
+        rows = parent.find_elements_by_css_selector('tr[id^="xSF"]')
+        assert len(dates) <= len(rows)
+        for i in range(len(dates)):
+            row = rows[i]
+            if not row.is_displayed():
+                assert i > 0
+                logger.debug("Adding reading dates %d", i+1)
+                rows[i-1].find_element_by_css_selector(f'#xmore{i} a').click()
+                self.wait_until(EC.visibility_of(row))
+            set_text(row, f'dr_start_{i+1}', dates[i]['started'])
+            set_text(row, f'dr_end_{i+1}', dates[i]['finished'])
+        # Clear any additional rows
+        for i in range(len(dates), len(rows)):
+            row = rows[i]
+            if not row.is_displayed():
+                break
+            set_text(row, f'dr_start_{i+1}', None)
+            set_text(row, f'dr_end_{i+1}', None)
+
+    venue_path_re = re.compile('/venue/([^/]+)')
+
+    def get_venue_id(self, anchor):
+        """Get the venue id from a link to the venue."""
+        href = urlparse(anchor.get_attribute('href'))
+        return self.venue_path_re.match(href.path).group(1)
 
     def parse_from_where(self, scope):
         """Find the current "From where?" value and "change"/"edit" link."""
         div = scope.find_element_by_css_selector(
-            ':scope > div[class="location"]')
+            ':scope > div.location')
         anchors = div.find_elements_by_tag_name('a')
         if len(anchors) == 1:
             # Free text location or no location
             change_link = anchors[0]
             location = div.text[:-(len(change_link.text) + 2)].strip()
+            venue_id = None
+            if location:
+                logger.debug("Current 'From where' value: %r, free text",
+                             location)
         elif len(anchors) == 2:
             # Venue
-            location = anchors[0].text
             change_link = anchors[1]
+            location = anchors[0].text
+            venue_id = self.get_venue_id(anchors[0])
+            logger.debug("Current 'From where' value: %r, venue id %r",
+                         location, venue_id)
         else:
-            raise RuntimeError("Unable to parse location field")
-
-        return location, change_link
+            raise RuntimeError("Unable to parse 'From where' field")
+        return location, venue_id, change_link
 
     def open_location_popup(self, change_link):
         """Open the location editing popup."""
@@ -704,84 +656,176 @@ class LibraryThingRobot:
             ':scope > p:nth-of-type(3) > a')
         logger.debug("Clicking location remove link")
         remove_link.click()
+        self.wait_until(EC.staleness_of(popup))
 
-    def select_already_used_location(self, popup, from_where):
-        """Select a location from the already used location list."""
-        locations = popup.find_elements_by_css_selector(
-            '#locationlist > p > a:nth-of-type(1)')
-        for anchor in locations:
-            if anchor.text == from_where:
-                logger.debug("Selecting already used venue %r", from_where)
-                anchor.click()
-                self.wait_until(EC.staleness_of(popup))
-                return True
-        return False
-
-    def search_for_venue(self, popup, from_where):
-        """Search for a venue by name."""
-        if self.config.no_venue_search:
+    def select_already_used_venue_id(self, popup, venue_name, venue_id):
+        """Select a location from the already used list by venue id."""
+        venue_link = try_find(
+            popup.find_element_by_css_selector,
+            f'#locationlist > p > a[href="/venue/{venue_id}"], '
+            f'#locationlist > p > a[href^="/venue/{venue_id}/"]')
+        if not venue_link:
             return False
+        paragraph = get_parent(venue_link)
+        anchor = paragraph.find_element_by_css_selector(
+            ':scope > a:nth-of-type(1)')
+        this_name = anchor.text
+        if this_name != venue_name:
+            logger.warning("Venue with id %r has name %r, expected %r",
+                           venue_id, this_name, venue_name)
+        logger.debug("Selecting already used venue %r, id %r",
+                     this_name, venue_id)
+        anchor.click()
+        self.wait_until(EC.staleness_of(popup))
+        return True
+
+    def select_already_used_location(self, popup, venue_name):
+        """Select a location from the already used list by name."""
+        div = popup.find_element_by_id('locationlist')
+        anchor = try_find(div.find_element_by_link_text, venue_name)
+        if not anchor:
+            return False
+        # Make sure we actually found the right kind of link, or fall back to
+        # iterating over the list by selector and checking each one
+        selector = '#locationlist > p > a:nth-of-type(1)'
+        if not self.driver.execute_script(
+                "arguments[0].matches(arguments[1])", anchor, selector):
+            for anchor in popup.find_elements_by_css_selector(selector):
+                if anchor.text == venue_name:
+                    break
+            else:
+                return False
+        # Get venue id for logging purposes
+        paragraph = get_parent(anchor)
+        venue_anchor = try_find(
+            paragraph.find_element_by_css_selector,
+            ':scope > a:nth-of-type(2)')
+        this_venue_id = (self.get_venue_id(venue_anchor) if venue_anchor
+                         else None)
+        if this_venue_id:
+            logger.debug("Selecting already used venue %r, id %r",
+                         venue_name, this_venue_id)
+        else:
+            logger.debug("Selecting already used venue %r, free text",
+                         venue_name)
+        anchor.click()
+        self.wait_until(EC.staleness_of(popup))
+        return True
+
+    def search_for_venue(self, popup, venue_name, venue_id):
+        """Search for a venue by name."""
+        tab = popup.find_element_by_id('lbtabarea1')
         logger.debug("Choosing 'Venue search' tab")
         popup.find_element_by_id('lbtabchromemenu1').click()
-        form = popup.find_element_by_id('venuesearchform')
+        self.wait_until(EC.visibility_of(tab))
+        form = tab.find_element_by_id('venuesearchform')
         search_field = form.find_element_by_css_selector('input[name="query"]')
-        logger.debug("Populating venue search field")
+        logger.debug("Populating venue search field with %r", venue_name)
         search_field.clear()
         search_field.send_keys('"')
-        search_field.send_keys(from_where)
+        search_field.send_keys(venue_name)
         search_field.send_keys('"')
         submit_button = form.find_element_by_css_selector(
             'input[name="Submit"]')
+        results = popup.find_element_by_id('venuelist')
         logger.debug("Clicking search button")
         submit_button.click()
-        results = popup.find_element_by_id('venuelist')
         self.wait_until(lambda _: 'updating' not in get_class_list(results))
-        venues = results.find_elements_by_css_selector(
-            ':scope > p > a:nth-of-type(1)')
-        for anchor in venues:
-            if anchor.text == from_where:
-                logger.debug("Selecting venue %r", from_where)
-                anchor.click()
-                self.wait_until(EC.staleness_of(popup))
-                return True
-        return False
+        if venue_id:
+            venue_link = try_find(
+                results.find_element_by_css_selector,
+                f':scope > p > a[href="/venue/{venue_id}"], '
+                f':scope > p > a[href^="/venue/{venue_id}/"]')
+            if not venue_link:
+                return False
+            paragraph = get_parent(venue_link)
+            anchor = paragraph.find_element_by_css_selector('a:nth-of-type(1)')
+            this_name = anchor.text
+            this_venue_id = venue_id
+            if this_name != venue_name:
+                logger.warning("Venue with id %r has name %r, expected %r",
+                               venue_id, this_name, venue_name)
+        else:
+            anchor = try_find(results.find_element_by_link_text, venue_name)
+            if not anchor:
+                return False
+            # Make sure we found the right kind of link, if not fall back to
+            # iterating over the list
+            if not self.driver.execute_script(
+                    "arguments[0].matches(arguments[1])", anchor,
+                    '#venuelist > p > a:nth-of-type(1)'):
+                for anchor in results.find_elements_by_css_selector(
+                        ':scope > p > a:nth-of-type(1)'):
+                    if anchor.text == venue_name:
+                        break
+                else:
+                    return False
+            paragraph = get_parent(anchor)
+            venue_link = paragraph.find_element_by_css_selector(
+                ':scope > a:nth-of-type(2)')
+            this_name = venue_name
+            this_venue_id = self.get_venue_id(venue_link)
+        logger.debug("Selecting venue %r, id %r", this_name, this_venue_id)
+        anchor.click()
+        self.wait_until(EC.staleness_of(popup))
+        return True
 
     def set_from_where_free_text(self, popup, from_where):
         """Enter a free-text location value."""
+        tab = popup.find_element_by_id('lbtabarea2')
         logger.debug("Choosing 'Free text' tab")
         popup.find_element_by_id('lbtabchromemenu2').click()
-        form = popup.find_element_by_id('freetextform')
+        self.wait_until(EC.visibility_of(tab))
+        form = tab.find_element_by_id('freetextform')
         set_text(form, 'textareacomments', from_where)
         submit_button = form.find_element_by_css_selector(
             'input[name="Submit"]')
         logger.debug("Saving location")
         submit_button.click()
+        self.wait_until(EC.staleness_of(popup))
 
-    def set_location(self, popup, from_where):
+    def set_location(self, popup, venue_name, venue_id, has_extra):
         """Use the location editing pop-up to set a location."""
-        # Check if venue is already used
-        if self.select_already_used_location(popup, from_where):
+        # Check for already used venue
+        if venue_id and self.select_already_used_venue_id(
+                popup, venue_name, venue_id):
             return
-        # Search for venue by name
-        if self.search_for_venue(popup, from_where):
+        elif (not has_extra) and self.select_already_used_location(
+                popup, venue_name):
+            return
+        # Search for venue
+        if (venue_id or not has_extra) and self.search_for_venue(
+                popup, venue_name, venue_id):
             return
         # Enter location as free text
-        self.set_from_where_free_text(popup, from_where)
+        if venue_id:
+            logger.warning("Didn't find venue with name %r, id %r, "
+                           "falling back to free text", venue_name, venue_id)
+        self.set_from_where_free_text(popup, venue_name)
 
-    def set_from_where(self, from_where):
+    def set_from_where(self, from_where, extra_fw):
         """Set the "From where?" field."""
+        if extra_fw:
+            venue_name = extra_fw['name']
+            venue_id = extra_fw.get('venue_id')
+            if venue_id:
+                assert venue_id.isascii() and venue_id.isalnum()
+            has_extra = True
+        else:
+            venue_name = from_where
+            venue_id = None
+            has_extra = False
         parent = self.driver.find_element_by_id('bookedit_datestarted')
-        location, change_link = self.parse_from_where(parent)
-        if not from_where:
-            if location:
+        curr_name, curr_id, change_link = self.parse_from_where(parent)
+        if not venue_name:
+            if curr_name:
                 popup = self.open_location_popup(change_link)
                 self.clear_location(popup)
-                self.wait_until(EC.staleness_of(popup))
             return
-        if location != from_where:
+        if curr_name != venue_name or (has_extra and venue_id != curr_id):
             popup = self.open_location_popup(change_link)
-            self.set_location(popup, from_where)
-            self.wait_until(EC.staleness_of(popup))
+            self.set_location(popup, venue_name, venue_id, has_extra)
+        return True
 
     def set_or_confirm(self, name, value):
         parent = self.driver.find_element_by_id(f'bookedit_{name}')
@@ -810,9 +854,9 @@ class LibraryThingRobot:
             if physical_description:
                 logger.warning("Unable to set physical description")
 
-    def set_summary(self, summary):
+    def set_summary(self, summary, autogen):
         """Set the summary field."""
-        if self.config.summary == 'auto':
+        if autogen or (autogen is None and self.config.summary == 'auto'):
             summary = None
         set_text(self.driver, 'form_summary', summary)
 
@@ -879,6 +923,8 @@ class LibraryThingRobot:
 
     def set_book_fields(self, book_id, book_data):
         """Populate the fields of the add/edit book form and save changes."""
+        extra_data = book_data.get('_extra', {})
+
         # Title
         set_text(self.driver, 'form_title', book_data['title'])
 
@@ -908,7 +954,9 @@ class LibraryThingRobot:
         self.set_review_language(book_data.get('reviewlang'))
 
         # Other authors
-        sauthors = authors[1:] if authors else []
+        # Use extra field 'secondary_authors' if available to preserve order
+        sauthors = (extra_data.get('secondary_authors')
+                    or authors[1:] if authors else [])
         self.set_other_authors(sauthors)
 
         # Format
@@ -928,27 +976,25 @@ class LibraryThingRobot:
         self.set_weights(book_data.get('weight'))
 
         # Languages
-        self.set_language('primary', 'bookedit_lang',
-                          get_path(book_data, 'language', 0),
-                          get_path(book_data, 'language_codeA', 0))
-        self.set_language('secondary', 'bookedit_lang2',
-                          get_path(book_data, 'language', 1),
-                          get_path(book_data, 'language_codeA', 1))
-        self.set_original_language(book_data)
+        self.set_languages(book_data, extra_data.get('languages'))
 
         # Reading dates
         self.set_reading_dates(book_data.get('datestarted'),
-                               book_data.get('dateread'))
+                               book_data.get('dateread'),
+                               extra_data.get('reading_dates'))
 
         # Date acquired
         set_text(self.driver, 'form_datebought', book_data.get('dateacquired'))
 
         # From where
-        self.set_from_where(book_data.get('fromwhere'))
+        self.set_from_where(book_data.get('fromwhere'),
+                            extra_data.get('from_where'))
 
         # Classification
         self.set_or_confirm('lccallnumber', get_path(book_data, 'lcc', 'code'))
-        self.set_or_confirm('dewey', get_path(book_data, 'ddc', 'code', 0))
+        set_text(self.driver, 'form_lexile', extra_data.get('lexile'))
+        self.set_or_confirm('dewey', extra_data.get(
+            'dewey', get_path(book_data, 'ddc', 'code', 0)))
         set_text(self.driver, 'form_btc_callnumber',
                  get_path(book_data, 'callnumber', 0))
 
@@ -959,7 +1005,8 @@ class LibraryThingRobot:
 
         # Summary
         self.set_physical_summary(book_data.get('physical_description'))
-        self.set_summary(book_data.get('summary'))
+        self.set_summary(book_data.get('summary'),
+                         extra_data.get('summary_autogenerated'))
 
         # Identifiers
         # TODO: Set book id as barcode if none specified
@@ -1025,6 +1072,7 @@ class LibraryThingRobot:
         return True
 
     def add_source_lb(self, scope, lb_content, lsource, have_overcat):
+        """Add a source using the lightbox."""
         # Short-circuit if the specified source is already known to be absent
         if (self.featured_sources and self.all_sources
                 and lsource not in self.featured_sources
@@ -1068,12 +1116,11 @@ class LibraryThingRobot:
         lb_content = self.wait_for_lb()
         found = self.add_source_lb(scope, lb_content, lsource, have_overcat)
         # Close lightbox
-        logger.debug("Closing add source popup")
-        self.driver.find_element_by_id('LT_LT_closebutton').click()
-        self.wait_until(EC.invisibility_of_element(lb_content))
+        self.close_lb(lb_content, "Closing add source popup")
         return found
 
     def select_source(self, source):
+        """Select a book data source."""
         lsource = source.casefold()
         parent = self.driver.find_element_by_id('yourlibrarylist')
         rbs = self.parse_source_list(parent)
@@ -1184,6 +1231,203 @@ class LibraryThingRobot:
         if expected_work_id and work_id != expected_work_id:
             logger.warning("Book id %s has work id %s, expected %s",
                            book_id, work_id, expected_work_id)
+        return work_id, book_id
+
+    ctypes = {
+        'cc': '1',
+        'isbn': '2',
+        'asin': '3',
+    }
+
+    def confirm_cover_selection(self, scope, cover_id, cpfx, cid, *, info):
+        """Confirm cover selection."""
+        confirm = scope.find_element_by_id('changecover_confirm')
+        # Make sure we clicked on the right cover
+        ctype = self.ctypes[cpfx]
+        c_id = confirm.find_element_by_css_selector('input[name="id"]') \
+            .get_attribute('value')
+        c_type = confirm.find_element_by_css_selector('input[name="type"]') \
+            .get_attribute('value')
+        if c_id != cid or c_type != ctype:
+            raise RuntimeError(
+                f"Failed to select correct cover id {cover_id!r}: "
+                f"got type={c_type!r}, id={c_id!r}")
+        # Don't change ISBN of book
+        isbn_checkbox = try_find(confirm.find_element_by_css_selector,
+                                 'input[name="changeisbn"]')
+        if isbn_checkbox and isbn_checkbox.is_selected():
+            logger.debug("Deselecting 'change isbn' checkbox")
+            isbn_checkbox.click()
+        # Confirm selection
+        submit = confirm.find_element_by_css_selector('input[type="submit"]')
+        if info:
+            # Variant 1: Cover info dialog
+            logger.debug("Confirming cover selection")
+            submit.click()
+            alert = self.wait_until(EC.alert_is_present())
+            alert.accept()
+        else:
+            # Variant 2: "Choose this cover" dialog
+            self.click_link(submit, "Confirming cover selection")
+
+    cover_onclick_re = re.compile(r"si_info\('([^']*)'\)")
+
+    def check_and_confirm_cover(self, cover_id, cpfx, cid):
+        """Check book cover id and confirm if it matches the target."""
+        div = self.driver.find_element_by_id('maincover')
+        anchor = div.find_element_by_tag_name('a')
+        match = self.cover_onclick_re.match(anchor.get_attribute('onclick'))
+        current_cover_id = match.group(1)
+        logger.debug("Current cover id: %r", current_cover_id)
+        if current_cover_id != cover_id:
+            return False
+        # Cover id matches, confirm
+        icon = anchor.find_element_by_css_selector('img.icon')
+        logger.debug("Clicking cover info button")
+        self.driver.execute_script(
+            "arguments[0].scrollIntoView({block: 'center'});", div)
+        ActionChains(self.driver).move_to_element(div) \
+            .move_to_element(icon).click(icon).perform()
+        lb_content = self.wait_for_lb()
+        confirm_div = lb_content.find_element_by_css_selector(
+            '.coverinfo > div.alwaysblue:nth-child(1)')
+        if try_find(confirm_div.find_element_by_css_selector,
+                    'img.icon[src$="tick.png"]'):
+            self.close_lb(lb_content, "Cover already confirmed, "
+                          "closing cover info lightbox")
+            return True
+        self.confirm_cover_selection(confirm_div, cover_id, cpfx, cid,
+                                     info=True)
+        self.wait_until(EC.invisibility_of_element(lb_content))
+        return True
+
+    blank_covers = set()
+
+    def parse_blank_covers(self):
+        """Parse cover ids for blank covers."""
+        logger.debug("Parsing blank cover ids")
+        div = self.driver.find_element_by_id('memberblank')
+        logger.debug("Clicking 'show all' link for blank covers")
+        div.find_element_by_css_selector('p.limitedlink a').click()
+        self.wait_until(lambda _: 'showall' in get_class_list(div))
+        for elt in div.find_elements_by_css_selector('a.blankcoverpick'):
+            qs = parse_qs(urlparse(elt.get_attribute('href')).query)
+            assert qs['type'] == ['1']
+            cid, = qs['id']
+            self.blank_covers.add(f'cc_{cid}')
+
+    def set_default_cover(self, book_id):
+        """Set cover to user default."""
+        path = f"/changecover_newcover.php?book_id={book_id}&type=1&id=1"
+        link = self.driver.find_element_by_css_selector(
+            f'#middleColumn a[href="{path}"]')
+        self.click_link(link, "Selecting default cover")
+
+    def set_blank_cover(self, cid):
+        """Set cover to blank cover by numeric id."""
+        div = self.driver.find_element_by_id('memberblank')
+        elt = div.find_element_by_css_selector(
+            f'a.blankcoverpick[href$="&type=1&id={cid}"]')
+        if not elt.is_displayed():
+            logger.debug("Clicking 'show all' link for blank covers")
+            div.find_element_by_css_selector('p.limitedlink a').click()
+            self.wait_until(lambda _: 'showall' in get_class_list(div))
+        self.click_link(elt, "Selecting blank cover with id %r", cid)
+
+    def wait_until_location_stable(self, elt):
+        """Attempt to wait until an element's location is stable."""
+        prev_location = None
+        location = elt.location
+        deadline = time.monotonic() + 30
+        while location != prev_location:
+            if time.monotonic() > deadline:
+                raise TimeoutError("Element location failed to stabilize")
+            time.sleep(1)
+            self.driver.execute_script(
+                "arguments[0].scrollIntoView({block: 'center'});", elt)
+            location, prev_location = elt.location, location
+
+    def set_cover_from_list(self, div_id, term, cover_id, cpfx, cid):
+        """Set cover by id from the specified section."""
+        div = self.driver.find_element_by_id(div_id)
+        self.wait_until(lambda _: 'updating' not in get_class_list(div))
+        cover_div_id = f'am_{cid}' if cpfx == 'isbn' else cover_id
+        cover_div = try_find(div.find_element_by_id, cover_div_id)
+        if not cover_div:
+            show_all = try_find(div.find_element_by_css_selector,
+                                'p.limitedlink a')
+            if show_all:
+                logger.debug("Clicking 'show all' link for %s covers", term)
+                show_all.click()
+                self.wait_until(
+                    lambda _: 'updating' not in get_class_list(div))
+                cover_div = try_find(div.find_element_by_id, cover_div_id)
+            if not cover_div:
+                return False  # Cover not found
+        logger.debug("Selecting %s cover with id %r", term, cover_id)
+        info = self.driver.find_element_by_id('infoicon')
+        choose = info.find_element_by_css_selector(
+            ':scope > div:nth-of-type(2)')
+        # In Firefox, the move-to-element action does not scroll the viewport
+        # and fails if the element is not visible
+        # https://github.com/mozilla/geckodriver/issues/776
+        self.driver.execute_script(
+            "arguments[0].scrollIntoView({block: 'center'});", cover_div)
+        # Try to wait for the element position to stabilize before attempting
+        # the mouseover-and-click action chain
+        self.wait_until_location_stable(cover_div)
+        # Now mouseover the cover element and click on the overlay button
+        ActionChains(self.driver).move_to_element(cover_div) \
+            .move_to_element(choose).click(choose).perform()
+        lb_content = self.wait_for_lb()
+        self.confirm_cover_selection(lb_content, cover_id, cpfx, cid,
+                                     info=False)
+        return True
+
+    def set_member_cover(self, cover_id, cpfx, cid):
+        """Set member-uploaded cover by id."""
+        return self.set_cover_from_list(
+            'coverlist_customcovers', 'member-uploaded', cover_id, cpfx, cid)
+
+    def set_amazon_cover(self, cover_id, cpfx, cid):
+        """Set Amazon cover by id."""
+        return self.set_cover_from_list(
+            'coverlist_amazon', 'Amazon', cover_id, cpfx, cid)
+
+    def set_cover(self, work_id, book_id, cover_data):
+        """Set book cover."""
+        cover_id = cover_data['id']
+        confirmed = cover_data.get('confirmed')
+        if confirmed is False:
+            # Don't set cover if source cover was chosen automatically
+            return
+        self.driver.get(
+            f'https://www.librarything.com/work/{work_id}/covers/{book_id}')
+        cpfx, cid = cover_id.split('_', 1)
+        # As a short-cut, check if the current cover already matches
+        if self.check_and_confirm_cover(cover_id, cpfx, cid):
+            return
+        coverlist_all = self.wait_until(EC.presence_of_element_located(
+            (By.ID, 'coverlist_all')))
+        self.wait_until(
+            lambda _: 'updating' not in get_class_list(coverlist_all))
+        found = False
+        if cpfx == 'cc':
+            if cid == '1':
+                self.set_default_cover(book_id)
+                found = True
+            else:
+                if not self.blank_covers:
+                    self.parse_blank_covers()
+                if cover_id in self.blank_covers:
+                    self.set_blank_cover(cid)
+                    found = True
+                else:
+                    found = self.set_member_cover(cover_id, cpfx, cid)
+        else:
+            found = self.set_amazon_cover(cover_id, cpfx, cid)
+        if not found:
+            logger.warning("Unable to find cover with id %r", cover_id)
 
     def add_book(self, book_id, book_data):
         """Add a new book."""
@@ -1194,103 +1438,61 @@ class LibraryThingRobot:
             added = self.add_from_source(book_id, book_data, source)
         if not added:
             self.add_manually(book_id, book_data)
-        self.check_work_id(book_data.get('workcode'))
-
-
-# Map from browser name to WebDriver class
-DRIVERS = {
-    'firefox': webdriver.Firefox,
-    'chrome': webdriver.Chrome,
-    'ie': webdriver.Ie,
-    'edge': webdriver.Edge,
-    'opera': webdriver.Opera,
-    'safari': webdriver.Safari,
-}
-
-
-def iter_books(data, book_ids):
-    if book_ids:
-        for book_id in book_ids:
-            if book_id in data:
-                yield book_id, data[book_id]
-            else:
-                logger.warning("Book id %r not found in data", book_id)
-    else:
-        yield from data.items()
+        new_work_id, new_book_id = self.check_work_id(
+            book_data.get('workcode'))
+        cover_data = get_path(book_data, '_extra', 'cover')
+        if cover_data and not self.config.no_covers:
+            try:
+                self.set_cover(new_work_id, new_book_id, cover_data)
+            except Exception:
+                logger.warning("Exception setting cover for book %r",
+                               new_book_id, exc_info=True)
+                if config.debug_mode:
+                    input("\aPress enter to continue: ")
 
 
 def main(config, data):
     """Import JSON data into LibraryThing."""
-    success = False
-    imported = 0
-    errors = 0
-    with DRIVERS[config.browser]() as driver:
-        ltrobot = LibraryThingRobot(config, driver)
-        try:
-            ltrobot.login()
-            with (open(config.errors_file, 'w') if config.errors_file
-                  else nullcontext()) as ef:
-                for book_id, book_data in iter_books(data, config.book_ids):
-                    time.sleep(1)
-                    try:
-                        ltrobot.add_book(book_id, book_data)
-                    except NoSuchWindowException:
-                        raise  # Fatal error, halt import
-                    except Exception:
-                        logger.warning("Failed to import book %s", book_id,
-                                       exc_info=True)
-                        if ef:
-                            ef.write(book_id)
-                            ef.write('\n')
-                            ef.flush()
-                        errors += 1
-                        if config.debug_mode:
-                            input("\aPress enter to continue: ")
-                    else:
-                        imported += 1
-            logger.info("%d books imported, %d errors", imported, errors)
-            success = True
-        except KeyboardInterrupt:
-            logger.info("Interrupted, exiting")
-        except Exception:
-            logger.error("Import failed with exception", exc_info=True)
-        finally:
-            if config.debug_mode:
-                input("\aPress enter to exit: ")
 
-    return success
+    def init_fn(driver):
+        ltrobot = LibraryThingImporter(config, driver)
+        ltrobot.login()
+        return ltrobot
+
+    return main_loop(config, data, 'import', init_fn,
+                     LibraryThingImporter.add_book)
 
 
-def parse_list(value):
-    """Parse a list of values separated by commas or whitespace."""
-    return [w for v in value.split(',') for w in v.split()] if value else []
+def parse_search_by(config):
+    """Parse list of search identifiers."""
+    search_by = []
+    for identifier in parse_list(config.search_by):
+        if identifier not in LibraryThingImporter.id_keys:
+            raise ValueError("Invalid search identifier: %r", identifier)
+        search_by.append(identifier.lower())
+    config.search_by = search_by or list(LibraryThingImporter.id_keys)
+
+
+def add_extra_data(data, extra_file):
+    """Merge extra data into book data."""
+    with open(extra_file) as f:
+        extra = json.load(f)
+    for book_id, extra_data in extra.items():
+        if book_id in data:
+            data[book_id]['_extra'] = extra_data['_extra']
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('-v', '--verbose', action='store_true',
-                        help="Log additional debugging information.")
-    parser.add_argument('-b', '--browser', choices=DRIVERS,
-                        default='firefox', help="Browser to use")
-    group = parser.add_mutually_exclusive_group()
-    group.add_argument('-c', '--cookies-file',
-                       help="File to save/load login cookies")
-    parser.add_argument('-e', '--errors-file', help="Output file for list of "
-                        "book ids with import errors")
-    parser.add_argument('-i', '--book-ids',
-                        help="Comma-separated list of book ids to import, or "
-                        "@filename to read ids from file")
+    add_common_flags(parser)
     parser.add_argument('-s', '--no-source', action='store_true',
                         help="Ignore source field, add books manually")
     parser.add_argument('--search-by', help="Comma-separated list of search "
                         "identifiers to use when adding from source, in "
                         "priority order. Valid values: "
-                        f"{', '.join(LibraryThingRobot.id_keys)}")
+                        f"{', '.join(LibraryThingImporter.id_keys)}")
     parser.add_argument('-t', '--tag',
                         help="Tag to add to all imported books.")
-    parser.add_argument('--no-venue-search', action='store_true',
-                        help="Don't search for venues when setting the "
-                        "'From where?' field")
     parser.add_argument('--physical-summary', choices=('auto', 'json'),
                         default='auto', help="How to set the 'Physical "
                         "summary' field: 'auto', leave blank for LibraryThing "
@@ -1305,27 +1507,18 @@ if __name__ == '__main__':
                        help="Set all books to private")
     group.add_argument('-P', '--public', action='store_true',
                        help="Set all books to public")
-    parser.add_argument('-d', '--debug-mode', action='store_true',
-                        help="Pause for confirmation after errors and at exit")
+    parser.add_argument('--no-covers', action='store_true',
+                        help="Don't set book covers")
     parser.add_argument('file', help="File containing JSON book data.")
+    parser.add_argument('extrafile', nargs='?',
+                        help="Optional file containing extra book data")
     config = parser.parse_args()
-    logging.basicConfig(level=logging.INFO)
-    if config.verbose:
-        logger.setLevel(logging.DEBUG)
+    init_logging(config, 'ltji')
+    parse_book_ids(config)
+    parse_search_by(config)
     with open(config.file) as f:
         data = json.load(f)
-    if config.book_ids is not None:
-        if config.book_ids.startswith('@'):
-            with open(config.book_ids[1:]) as f:
-                config.book_ids = f.read()
-        config.book_ids = parse_list(config.book_ids)
-        if not config.book_ids:
-            raise ValueError("Empty list of book ids")
-    search_by = []
-    for identifier in parse_list(config.search_by):
-        if identifier not in LibraryThingRobot.id_keys:
-            raise ValueError("Invalid search identifier: %r", identifier)
-        search_by.append(identifier.lower())
-    config.search_by = search_by or list(LibraryThingRobot.id_keys)
+    if config.extrafile:
+        add_extra_data(data, config.extrafile)
     success = main(config, data)
     exit(0 if success else 1)

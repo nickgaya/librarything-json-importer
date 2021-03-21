@@ -1327,6 +1327,8 @@ class LibraryThingImporter(LibraryThingRobot):
     def wait_until_location_stable(self, elt):
         """Attempt to wait until an element's location is stable."""
         prev_location = None
+        self.driver.execute_script(
+            "arguments[0].scrollIntoView({block: 'center'});", elt)
         location = elt.location
         deadline = time.monotonic() + 30
         while location != prev_location:
@@ -1397,10 +1399,14 @@ class LibraryThingImporter(LibraryThingRobot):
         # As a short-cut, check if the current cover already matches
         if self.check_and_confirm_cover(cover_id, cpfx, cid):
             return
-        coverlist_all = self.wait_until(EC.presence_of_element_located(
-            (By.ID, 'coverlist_all')))
+        # When the covers page loads, it makes two duplicate ajax requests to
+        # initialize the list of covers. This creates a race condition that
+        # prevents us from reliably detecting if the element is done updating,
+        # which can lead to unpredictable stale element reference errors when
+        # trying to select a cover. As a workaround, wait for all ajax requests
+        # to complete before proceeding.
         self.wait_until(
-            lambda _: 'updating' not in get_class_list(coverlist_all))
+            lambda wd: wd.execute_script('return jQuery.active === 0;'))
         found = False
         if cpfx == 'cc':
             if cid == '1':

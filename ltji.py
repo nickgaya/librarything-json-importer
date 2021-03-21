@@ -1240,9 +1240,7 @@ class LibraryThingImporter(LibraryThingRobot):
         c_type = confirm.find_element_by_css_selector('input[name="type"]') \
             .get_attribute('value')
         if c_id != cid or c_type != ctype:
-            raise RuntimeError(
-                f"Failed to select correct cover id {cover_id!r}: "
-                f"got type={c_type!r}, id={c_id!r}")
+            return False, c_type, c_id
         # Don't change ISBN of book
         isbn_checkbox = try_find(confirm.find_element_by_css_selector,
                                  'input[name="changeisbn"]')
@@ -1260,6 +1258,7 @@ class LibraryThingImporter(LibraryThingRobot):
         else:
             # Variant 2: "Choose this cover" dialog
             self.click_link(submit, "Confirming cover selection")
+        return True, c_type, c_id
 
     cover_onclick_re = re.compile(r"si_info\('([^']*)'\)")
 
@@ -1287,8 +1286,11 @@ class LibraryThingImporter(LibraryThingRobot):
             self.close_lb(lb_content, "Cover already confirmed, "
                           "closing cover info lightbox")
             return True
-        self.confirm_cover_selection(confirm_div, cover_id, cpfx, cid,
-                                     info=True)
+        success, c_type, c_id = self.confirm_cover_selection(
+            confirm_div, cover_id, cpfx, cid, info=True)
+        if not success:
+            raise RuntimeError(f"Failed to confirm cover id {cover_id!r}: "
+                               f"got type={c_type!r}, id={c_id!r}")
         self.wait_until(EC.invisibility_of_element(lb_content))
         return True
 
@@ -1361,21 +1363,26 @@ class LibraryThingImporter(LibraryThingRobot):
         info = self.driver.find_element_by_id('infoicon')
         choose = info.find_element_by_css_selector(
             ':scope > div:nth-of-type(2)')
-        # In Firefox, the move-to-element action does not scroll the viewport
-        # and fails if the element is not visible
-        # https://github.com/mozilla/geckodriver/issues/776
-        self.driver.execute_script(
-            "arguments[0].scrollIntoView({block: 'center'});", cover_div)
-        # Try to wait for the element position to stabilize before attempting
-        # the mouseover-and-click action chain
-        self.wait_until_location_stable(cover_div)
-        # Now mouseover the cover element and click on the overlay button
-        ActionChains(self.driver).move_to_element(cover_div) \
-            .move_to_element(choose).click(choose).perform()
-        lb_content = self.wait_for_lb()
-        self.confirm_cover_selection(lb_content, cover_id, cpfx, cid,
-                                     info=False)
-        return True
+        # This flow can be unreliable, so retry a few times
+        for _ in range(3):
+            # Wait for the element position to stabilize before attempting
+            # the mouseover-and-click action chain.
+            # This also scrolls the viewport which is necessary in Firefox due
+            # to https://github.com/mozilla/geckodriver/issues/776
+            self.wait_until_location_stable(cover_div)
+            # Now mouseover the cover element and click on the overlay button
+            ActionChains(self.driver).move_to_element(cover_div) \
+                .move_to_element(choose).click(choose).perform()
+            lb_content = self.wait_for_lb()
+            success, _, _ = self.confirm_cover_selection(
+                lb_content, cover_id, cpfx, cid, info=False)
+            if success:
+                return True
+            self.close_lb(lb_content, "Wrong cover selected, "
+                          "closing confirmation lightbox")
+        # Couldn't select the right cover even with retries
+        raise RuntimeError(
+            f"Failed to select {term} cover with id {cover_id!r}")
 
     def set_member_cover(self, cover_id, cpfx, cid):
         """Set member-uploaded cover by id."""

@@ -576,9 +576,8 @@ class LibraryThingImporter(LibraryThingRobot):
                               get_path(book_data, 'language_codeA', 1))
             self.set_original_language(book_data)
 
-    def set_reading_dates(self, started, finished, extra_dates):
+    def set_reading_dates(self, dates):
         """Set reading dates."""
-        dates = extra_dates or [{'started': started, 'finished': finished}]
         parent = self.driver.find_element_by_id('startedfinished')
         rows = parent.find_elements_by_css_selector('tr[id^="xSF"]')
         assert len(dates) <= len(rows)
@@ -945,8 +944,8 @@ class LibraryThingImporter(LibraryThingRobot):
 
         # Other authors
         # Use extra field 'secondary_authors' if available to preserve order
-        sauthors = (extra_data.get('secondary_authors')
-                    or authors[1:] if authors else [])
+        sauthors = extra_data.get('secondary_authors',
+                                  authors[1:] if authors else [])
         self.set_other_authors(sauthors)
 
         # Format
@@ -969,9 +968,10 @@ class LibraryThingImporter(LibraryThingRobot):
         self.set_languages(book_data, extra_data.get('languages'))
 
         # Reading dates
-        self.set_reading_dates(book_data.get('datestarted'),
-                               book_data.get('dateread'),
-                               extra_data.get('reading_dates'))
+        self.set_reading_dates(extra_data.get('reading_dates', {
+            'started': book_data.get('datestarted'),
+            'finished': book_data.get('dateread'),
+        }))
 
         # Date acquired
         set_text(self.driver, 'form_datebought', book_data.get('dateacquired'))

@@ -115,7 +115,6 @@ class LibraryThingScraper(LibraryThingRobot):
             return None
         name = div.text
         if not name:
-            logger.debug("Found blank 'From where' field")
             return {'name': ''}
         anchor = try_find(div.find_element_by_css_selector, '.xlocation > a')
         if anchor:

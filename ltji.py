@@ -571,7 +571,7 @@ class LibraryThingImporter(LibraryThingRobot):
         self.set_language('original', 'bookedit_lang_original', oname, ocode)
 
     def set_languages(self, book_data, extra_langs):
-        if extra_langs:
+        if extra_langs is not None:
             for key, eid in (('primary', 'bookedit_lang'),
                              ('secondary', 'bookedit_lang2'),
                              ('original', 'bookedit_lang_original')):
@@ -579,6 +579,8 @@ class LibraryThingImporter(LibraryThingRobot):
                 if lang_data:
                     self.set_language(
                         key, eid, lang_data['name'], lang_data['code'])
+                else:
+                    self.set_language(key, eid, None, None)
         else:
             self.set_language('primary', 'bookedit_lang',
                               get_path(book_data, 'language', 0),

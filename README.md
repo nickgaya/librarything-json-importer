@@ -64,9 +64,8 @@ The export script collects the following information:
 * **Secondary author list**. This ensures that the secondary authors will
   be imported in the same order as the original book.
 
-* **Book languages**. This does not affect import functionality except in some
-  uncommon edge cases, for example specifying the same primary and secondary
-  language.
+* **Book languages**. This is a workaround for quirks in how languages are
+  handled in the native export.
 
 * **Reading dates**. The native export only supports a single pair of reading
   start/end dates; the export script records the complete list.
